@@ -36,6 +36,8 @@
       sidoFilter: "전체",
       modelFilter: "전체",
       visitorFilter: "전체",
+      sortKey: "receipt_date",
+      sortDir: "desc",
       modalOpen: false,
       configModalOpen: false,
       pwModalOpen: false,
@@ -53,6 +55,8 @@
 
     const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note"];
     const DATE_KEYS = ["receipt_date", "visit_date", "completed_date"];
+    const NUMBER_KEYS = ["repair_cost", "parts_cost", "total_cost"];
+    const URGENCY_RANK = { "최긴급": 3, "긴급": 2, "일반": 1 };
 
     function showToast(msg) {
       const t = document.getElementById("toast");
@@ -97,6 +101,25 @@
       state.sidoFilter = "전체";
       state.modelFilter = "전체";
       state.visitorFilter = "전체";
+      state.sortKey = "receipt_date";
+      state.sortDir = "desc";
+      render();
+    }
+
+    function toggleSort(key) {
+      if (state.sortKey === key) {
+        state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+      } else {
+        state.sortKey = key;
+        state.sortDir = (DATE_KEYS.includes(key) || NUMBER_KEYS.includes(key) || key === "urgency") ? "desc" : "asc";
+      }
+      render();
+    }
+
+    function setMobileSort(val) {
+      const [key, dir] = val.split(":");
+      state.sortKey = key;
+      state.sortDir = dir;
       render();
     }
 
@@ -270,7 +293,7 @@
     }
 
     function getFilteredRecords() {
-      return state.records.filter(r => {
+      const filtered = state.records.filter(r => {
         if (state.statusFilter !== "전체" && r.status !== state.statusFilter) return false;
         if (state.sidoFilter !== "전체" && r.region_sido !== state.sidoFilter) return false;
         if (state.modelFilter !== "전체" && (r.model_name || "") !== state.modelFilter) return false;
@@ -281,6 +304,32 @@
           if (!target.includes(q)) return false;
         }
         return true;
+      });
+
+      const key = state.sortKey;
+      const mult = state.sortDir === "asc" ? 1 : -1;
+
+      return [...filtered].sort((a, b) => {
+        if (NUMBER_KEYS.includes(key)) {
+          return ((a[key] || 0) - (b[key] || 0)) * mult;
+        }
+        if (key === "urgency") {
+          return ((URGENCY_RANK[a.urgency] || 1) - (URGENCY_RANK[b.urgency] || 1)) * mult;
+        }
+        if (key === "region_sido") {
+          const va = `${a.region_sido || ""} ${a.region_sigun || ""}`.trim();
+          const vb = `${b.region_sido || ""} ${b.region_sigun || ""}`.trim();
+          if (!va && !vb) return 0;
+          if (!va) return 1;
+          if (!vb) return -1;
+          return va.localeCompare(vb, "ko") * mult;
+        }
+        const va = String(a[key] ?? "").trim();
+        const vb = String(b[key] ?? "").trim();
+        if (!va && !vb) return 0;
+        if (!va) return 1;
+        if (!vb) return -1;
+        return va.localeCompare(vb, "ko") * mult;
       });
     }
 
@@ -390,6 +439,17 @@
       return state.configs.find(c => c.field_key === key);
     }
 
+    function renderSortTh(key, label, alignRight = false) {
+      const active = state.sortKey === key;
+      const icon = active
+        ? (state.sortDir === "asc" ? `<span class="text-blue-600 ml-1">▲</span>` : `<span class="text-blue-600 ml-1">▼</span>`)
+        : `<span class="text-gray-300 ml-1">⇅</span>`;
+      return `
+        <th onclick="toggleSort('${key}')" class="p-3 cursor-pointer select-none hover:bg-gray-100 transition ${alignRight ? "text-right" : ""} ${active ? "text-blue-700 bg-blue-50/50" : ""}">
+          ${label}${icon}
+        </th>`;
+    }
+
     function render() {
       const app = document.getElementById("app");
       if (!state.user) {
@@ -430,7 +490,8 @@
       ]);
       const visitorOpts = Array.from(visitorSet);
 
-      const hasActiveFilter = state.search || state.statusFilter !== "전체" || state.sidoFilter !== "전체" || state.modelFilter !== "전체" || state.visitorFilter !== "전체";
+      const hasActiveFilter = state.search || state.statusFilter !== "전체" || state.sidoFilter !== "전체" || state.modelFilter !== "전체" || state.visitorFilter !== "전체" || state.sortKey !== "receipt_date" || state.sortDir !== "desc";
+      const currentSortVal = `${state.sortKey}:${state.sortDir}`;
 
       app.innerHTML = `
         <!-- 상단 바 -->
@@ -474,31 +535,44 @@
                 <option value="전체" ${state.visitorFilter==="전체"?"selected":""}>방문자: 전체</option>
                 ${visitorOpts.map(v => `<option value="${v}" ${state.visitorFilter===v?"selected":""}>${v}</option>`).join("")}
               </select>
+              <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-blue-200 rounded-lg px-2.5 py-2 text-sm bg-blue-50/40 font-medium text-blue-900">
+                <option value="receipt_date:desc" ${currentSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일자 최신순 ▼</option>
+                <option value="receipt_date:asc" ${currentSortVal==="receipt_date:asc"?"selected":""}>정렬: 접수일자 오래된순 ▲</option>
+                <option value="visit_date:asc" ${currentSortVal==="visit_date:asc"?"selected":""}>정렬: 출장예정일 빠른순 ▲</option>
+                <option value="visit_date:desc" ${currentSortVal==="visit_date:desc"?"selected":""}>정렬: 출장예정일 늦은순 ▼</option>
+                <option value="urgency:desc" ${currentSortVal==="urgency:desc"?"selected":""}>정렬: 긴급도 높은순 ▼</option>
+                <option value="status:asc" ${currentSortVal==="status:asc"?"selected":""}>정렬: 상태순 ▲</option>
+                <option value="customer_name:asc" ${currentSortVal==="customer_name:asc"?"selected":""}>정렬: 고객명 가나다순 ▲</option>
+                <option value="region_sido:asc" ${currentSortVal==="region_sido:asc"?"selected":""}>정렬: 지역순 ▲</option>
+                <option value="model_name:asc" ${currentSortVal==="model_name:asc"?"selected":""}>정렬: 모델명순 ▲</option>
+                <option value="visitor:asc" ${currentSortVal==="visitor:asc"?"selected":""}>정렬: 방문자순 ▲</option>
+                <option value="total_cost:desc" ${currentSortVal==="total_cost:desc"?"selected":""}>정렬: 합계금액 높은순 ▼</option>
+              </select>
             </div>
           </div>
 
-          <div class="text-xs text-gray-500 mb-2 px-1">총 <b>${filtered.length}</b>건 조회됨 (항목을 클릭하면 전체 상세 내용을 보고 수정할 수 있습니다)</div>
+          <div class="text-xs text-gray-500 mb-2 px-1">총 <b>${filtered.length}</b>건 조회됨 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
 
           <!-- PC 화면: 표(테이블) 뷰 -->
           <div class="hidden md:block bg-white rounded-xl shadow-sm overflow-x-auto">
             <table class="w-full text-sm text-left whitespace-nowrap">
               <thead class="bg-gray-50 border-b text-gray-600">
                 <tr>
-                  <th class="p-3">상태</th>
-                  <th class="p-3">긴급도</th>
-                  <th class="p-3">고객명</th>
-                  <th class="p-3">접수일자</th>
-                  <th class="p-3">출장예정일</th>
-                  <th class="p-3">방문자</th>
-                  <th class="p-3">지역</th>
-                  <th class="p-3">연락처</th>
-                  <th class="p-3">모델(기대번호)</th>
-                  <th class="p-3">접수시 증상</th>
-                  <th class="p-3">구분</th>
-                  <th class="p-3 text-right">수리비</th>
-                  <th class="p-3 text-right">부품비</th>
-                  <th class="p-3 text-right">합계금액</th>
-                  <th class="p-3">작성/수정자</th>
+                  ${renderSortTh("status", "상태")}
+                  ${renderSortTh("urgency", "긴급도")}
+                  ${renderSortTh("customer_name", "고객명")}
+                  ${renderSortTh("receipt_date", "접수일자")}
+                  ${renderSortTh("visit_date", "출장예정일")}
+                  ${renderSortTh("visitor", "방문자")}
+                  ${renderSortTh("region_sido", "지역")}
+                  ${renderSortTh("phone", "연락처")}
+                  ${renderSortTh("model_name", "모델(기대번호)")}
+                  ${renderSortTh("symptom_detail", "접수시 증상")}
+                  ${renderSortTh("payment_type", "구분")}
+                  ${renderSortTh("repair_cost", "수리비", true)}
+                  ${renderSortTh("parts_cost", "부품비", true)}
+                  ${renderSortTh("total_cost", "합계금액", true)}
+                  ${renderSortTh("created_by", "작성/수정자")}
                 </tr>
               </thead>
               <tbody class="divide-y">
@@ -603,7 +677,7 @@
                   <div class="font-bold text-gray-800 text-sm">📗 최신 엑셀용 (.xlsx)</div>
                   <div class="text-xs text-gray-500 mt-0.5">엑셀 2007 이상 표준 형식</div>
                 </button>
-                <button onclick="exportExcel('csv')" class="w-full text-left p-3 rounded-xl border border-gray-200 hover:bg-gray-50 transition">
+                <button onclick="exportExcel('csv')" class="w-full text-left p-3.5 rounded-xl border border-gray-200 hover:bg-gray-50 transition">
                   <div class="font-bold text-gray-700 text-sm">📄 CSV 파일 (.csv)</div>
                   <div class="text-xs text-gray-500 mt-0.5">일반 텍스트 데이터 형식</div>
                 </button>
