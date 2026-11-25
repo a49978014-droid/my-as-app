@@ -649,6 +649,8 @@
       const clean = normalizeStatus(st);
       if (clean === "접수") return "bg-blue-100 text-blue-700";
       if (clean === "부품대기") return "bg-red-100 text-red-700";
+      if (clean === "타업체수리요청") return "bg-purple-100 text-purple-700";
+      if (clean === "프로그램수정대기") return "bg-indigo-100 text-indigo-700";
       if (clean === "처리완료") return "bg-green-100 text-green-700";
       if (clean === "처리중" || clean === "대기중") return "bg-yellow-100 text-yellow-800";
       if (clean === "보류") return "bg-gray-200 text-gray-700";
@@ -715,6 +717,8 @@
       const totalCnt = baseFiltered.length;
       const receiptCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "접수").length;
       const partsWaitCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "부품대기").length;
+      const externalRepairCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "타업체수리요청").length;
+      const programModCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "프로그램수정대기").length;
       const doneCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "처리완료").length;
 
       const activeNorm = normalizeStatus(state.statusFilter);
@@ -733,6 +737,14 @@
             <span class="text-gray-300">/</span>
             <button type="button" onclick="setQuickStatusFilter('부품대기')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "부품대기" ? "bg-red-600 text-white shadow-xs" : "bg-red-50 text-red-700 hover:bg-red-100"}">
               부품대기 <b>${partsWaitCnt}</b>건
+            </button>
+            <span class="text-gray-300">/</span>
+            <button type="button" onclick="setQuickStatusFilter('타업체 수리 요청')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "타업체수리요청" ? "bg-purple-600 text-white shadow-xs" : "bg-purple-50 text-purple-700 hover:bg-purple-100"}">
+              타업체 수리 요청 <b>${externalRepairCnt}</b>건
+            </button>
+            <span class="text-gray-300">/</span>
+            <button type="button" onclick="setQuickStatusFilter('프로그램 수정 대기')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "프로그램수정대기" ? "bg-indigo-600 text-white shadow-xs" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}">
+              프로그램 수정 대기 <b>${programModCnt}</b>건
             </button>
             <span class="text-gray-300">/</span>
             <button type="button" onclick="setQuickStatusFilter('처리완료')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "처리완료" ? "bg-green-600 text-white shadow-xs" : "bg-green-50 text-green-700 hover:bg-green-100"}">
@@ -891,7 +903,7 @@
         return;
       }
 
-      const statusOpts = getCfg("status")?.options || ["접수","처리중","부품대기","처리완료","보류"];
+      const statusOpts = getCfg("status")?.options || ["접수","처리중","부품대기","타업체 수리 요청","프로그램 수정 대기","처리완료","보류"];
       const sidoOpts = getCfg("region_sido")?.options || ["서울","경기","인천","강원","충북","충남","대전","세종","전북","전남","광주","경북","경남","대구","울산","부산","제주"];
 
       const modelSet = new Set([
