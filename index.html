@@ -438,7 +438,7 @@
         replacement_type: f.replacement_type?.value || "",
         dealer_name: f.dealer_name?.value.trim() || "",
         dealer_phone: formatKoreanPhone(f.dealer_phone?.value.trim() || ""),
-        payment_type: f.payment_type?.value || "현금",
+        payment_type: f.payment_type?.value || "",
         repair_cost: parseInt(f.repair_cost?.value || 0, 10),
         parts_cost: parseInt(f.parts_cost?.value || 0, 10),
         custom_fields: customFields,
@@ -561,8 +561,8 @@
 
       return [...filtered].sort((a, b) => {
         if (key === "vat_cost") {
-          const va = getVatAmount(a.payment_type || "현금", a.repair_cost, a.parts_cost);
-          const vb = getVatAmount(b.payment_type || "현금", b.repair_cost, b.parts_cost);
+          const va = getVatAmount(a.payment_type || "", a.repair_cost, a.parts_cost);
+          const vb = getVatAmount(b.payment_type || "", b.repair_cost, b.parts_cost);
           return (va - vb) * mult;
         }
         if (NUMBER_KEYS.includes(key)) {
@@ -614,7 +614,7 @@
       ];
 
       const dataRows = rows.map(r => {
-        const pt = r.payment_type || "현금";
+        const pt = r.payment_type || "";
         const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
         return [
           ...sysCols.map(c => r[c.field_key] ?? ""),
@@ -685,11 +685,12 @@
     function paymentBadge(pt) {
       if (pt === "세금계산서") return "bg-indigo-100 text-indigo-700";
       if (pt === "무상") return "bg-gray-200 text-gray-700";
-      return "bg-emerald-100 text-emerald-700";
+      if (pt === "현금") return "bg-emerald-100 text-emerald-700";
+      return "bg-gray-100 text-gray-500";
     }
 
     function calcModalTotal() {
-      const payType = document.getElementById("inpPaymentType")?.value || "현금";
+      const payType = document.getElementById("inpPaymentType")?.value || "";
       const r = parseInt(document.getElementById("inpRepairCost")?.value || 0, 10);
       const p = parseInt(document.getElementById("inpPartsCost")?.value || 0, 10);
       const vat = getVatAmount(payType, r, p);
@@ -706,8 +707,10 @@
           subEl.innerText = `(공급가 ${(r+p).toLocaleString()}원 + 부가세 ${vat.toLocaleString()}원)`;
         } else if (payType === "무상") {
           subEl.innerText = `(내부 발생비용 ${(r+p).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
-        } else {
+        } else if (payType === "현금") {
           subEl.innerText = `(수리비 + 부품비 / 부가세 0원)`;
+        } else {
+          subEl.innerText = `(수리비 + 부품비 / 수리비 구분 미선택)`;
         }
       }
     }
@@ -801,7 +804,7 @@
             </thead>
             <tbody class="divide-y">
               ${filtered.map(r => {
-                const pt = r.payment_type || "현금";
+                const pt = r.payment_type || "";
                 const ug = r.urgency || "보통";
                 const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
                 const createdStr = formatDateTime(r.created_at);
@@ -818,7 +821,7 @@
                   <td class="p-3">${r.phone || ""}</td>
                   <td class="p-3">${r.model_name || ""} ${r.serial_number ? `<span class="text-xs text-gray-400">(${r.serial_number})</span>` : ""}</td>
                   <td class="p-3 max-w-xs truncate">${r.symptom_detail || ""}</td>
-                  <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${paymentBadge(pt)}">${pt}</span></td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${paymentBadge(pt)}">${pt || "미선택"}</span></td>
                   <td class="p-3 text-right text-gray-600">${(r.repair_cost || 0).toLocaleString()}원</td>
                   <td class="p-3 text-right text-gray-600">${(r.parts_cost || 0).toLocaleString()}원</td>
                   <td class="p-3 text-right text-gray-600">${vat.toLocaleString()}원</td>
@@ -837,7 +840,7 @@
         <!-- 모바일 화면: 한 손 조작 카드 뷰 -->
         <div class="md:hidden space-y-3">
           ${filtered.map(r => {
-            const pt = r.payment_type || "현금";
+            const pt = r.payment_type || "";
             const ug = r.urgency || "보통";
             const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
             const createdStr = formatDateTime(r.created_at);
@@ -864,7 +867,7 @@
               </div>
               <div class="mt-2.5 bg-gray-50 px-2.5 py-1.5 rounded-lg flex justify-between items-center text-xs">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="px-1.5 py-0.5 rounded font-semibold ${paymentBadge(pt)}">${pt}</span>
+                  <span class="px-1.5 py-0.5 rounded font-semibold ${paymentBadge(pt)}">${pt || "미선택"}</span>
                   <span class="text-gray-600">수리 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()} / 부가세 ${vat.toLocaleString()}</span>
                 </div>
                 <span class="font-bold text-sm text-blue-700 shrink-0 ml-1">합계 ${(r.total_cost || 0).toLocaleString()}원</span>
@@ -1145,15 +1148,16 @@
       const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
       const customCols = state.configs.filter(c => !c.is_system);
 
-      const payType = r.payment_type || "현금";
+      const payType = r.payment_type ?? "";
       const repair = r.repair_cost || 0;
       const parts = r.parts_cost || 0;
       const vat = getVatAmount(payType, repair, parts);
       const total = calculateTotal(payType, repair, parts);
 
-      let subText = "(수리비 + 부품비 / 부가세 0원)";
+      let subText = "(수리비 + 부품비 / 수리비 구분 미선택)";
       if (payType === "세금계산서") subText = `(공급가 ${(repair+parts).toLocaleString()}원 + 부가세 ${vat.toLocaleString()}원)`;
       if (payType === "무상") subText = `(내부 발생비용 ${(repair+parts).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
+      if (payType === "현금") subText = "(수리비 + 부품비 / 부가세 0원)";
 
       return `
         <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
@@ -1193,6 +1197,7 @@
                 <div>
                   <label class="block font-bold text-xs text-blue-900 mb-1">수리비 구분</label>
                   <select id="inpPaymentType" name="payment_type" onchange="calcModalTotal()" class="w-full border border-blue-200 rounded-lg px-2 py-2 bg-white font-semibold">
+                    <option value="" ${payType===""?"selected":""}>선택</option>
                     <option value="현금" ${payType==="현금"?"selected":""}>현금</option>
                     <option value="세금계산서" ${payType==="세금계산서"?"selected":""}>세금계산서</option>
                     <option value="무상" ${payType==="무상"?"selected":""}>무상</option>
