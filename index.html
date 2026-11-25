@@ -62,6 +62,7 @@
       "repair_note", "replaced_parts", "replacement_type", "dealer_name", "dealer_phone"
     ];
 
+    const REQUIRED_KEYS = ["customer_name", "receipt_date", "phone", "model_name"];
     const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note"];
     const DATE_KEYS = ["receipt_date", "visit_date", "completed_date", "created_at"];
     const PHONE_KEYS = ["phone", "dealer_phone"];
@@ -392,22 +393,38 @@
     async function saveRecord(e) {
       e.preventDefault();
       const f = e.target;
+
+      const customerName = f.customer_name?.value.trim() || "";
+      const receiptDate = f.receipt_date?.value || "";
+      const phoneVal = formatKoreanPhone(f.phone?.value.trim() || "");
+      const modelName = f.model_name?.value.trim() || "";
+
+      const missing = [];
+      if (!customerName) missing.push("고객명");
+      if (!receiptDate) missing.push("접수일자");
+      if (!phoneVal) missing.push("연락처");
+      if (!modelName) missing.push("모델");
+
+      if (missing.length > 0) {
+        return alert(`필수 항목을 모두 입력해야 저장할 수 있습니다.\n(미입력 항목: ${missing.join(", ")})`);
+      }
+
       const customFields = {};
       state.configs.filter(c => !c.is_system).forEach(c => {
         customFields[c.field_key] = f["custom_" + c.field_key]?.value || "";
       });
 
       const payload = {
-        customer_name: f.customer_name?.value.trim() || "",
-        receipt_date: f.receipt_date?.value || new Date().toISOString().slice(0,10),
+        customer_name: customerName,
+        receipt_date: receiptDate,
         status: f.status?.value || "접수",
         urgency: f.urgency?.value || "보통",
         visit_date: f.visit_date?.value || null,
         region_sido: f.region_sido?.value || "",
         region_sigun: f.region_sigun?.value.trim() || "",
         address_detail: f.address_detail?.value.trim() || "",
-        phone: formatKoreanPhone(f.phone?.value.trim() || ""),
-        model_name: f.model_name?.value.trim() || "",
+        phone: phoneVal,
+        model_name: modelName,
         symptom_category: f.symptom_category?.value || "",
         symptom_detail: f.symptom_detail?.value.trim() || "",
         phone_action: f.phone_action?.value.trim() || "",
@@ -1113,7 +1130,7 @@
       return `
         <div class="${fullSpan}">
           <div class="flex justify-between items-center mb-1">
-            <label class="block font-medium">${cfg.field_label}${isRequired ? " *" : ""}</label>
+            <label class="block font-medium">${cfg.field_label}${isRequired ? ' <span class="text-red-500 font-bold">*</span>' : ""}</label>
             ${copyBtn}
           </div>
           ${inputHtml}
@@ -1142,7 +1159,10 @@
         <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
           <form id="asRecordForm" onsubmit="saveRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
             <div class="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
-              <h2 class="font-bold text-lg">${r.id ? "AS 내역 상세 / 수정" : "새 AS 접수 등록"}</h2>
+              <div>
+                <h2 class="font-bold text-lg">${r.id ? "AS 내역 상세 / 수정" : "새 AS 접수 등록"}</h2>
+                <p class="text-xs text-gray-500 mt-0.5"><span class="text-red-500 font-bold">*</span> 표시는 필수 입력 항목입니다</p>
+              </div>
               <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
             </div>
 
@@ -1156,7 +1176,7 @@
                 if (!r.id && c.field_key === "urgency") val = defaultUrgency;
                 if (!r.id && c.field_key === "receipt_channel") val = "전화";
                 if (!r.id && c.field_key === "replacement_type") val = "해당없음";
-                return renderDynamicInput(c, val, c.field_key === "customer_name");
+                return renderDynamicInput(c, val, REQUIRED_KEYS.includes(c.field_key));
               }).join("")}
             </div>
 
