@@ -64,6 +64,7 @@
 
     const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note"];
     const DATE_KEYS = ["receipt_date", "visit_date", "completed_date", "created_at"];
+    const PHONE_KEYS = ["phone", "dealer_phone"];
     const NUMBER_KEYS = ["repair_cost", "parts_cost", "vat_cost", "total_cost"];
     const URGENCY_RANK = {
       "매우긴급": 4, "최긴급": 4,
@@ -71,6 +72,29 @@
       "보통": 2, "일반": 2,
       "낮음": 1
     };
+
+    function formatKoreanPhone(val) {
+      const nums = String(val || "").replace(/[^0-9]/g, "");
+      if (!nums) return "";
+      if (nums.startsWith("02")) {
+        if (nums.length <= 2) return nums;
+        if (nums.length <= 5) return `${nums.slice(0, 2)}-${nums.slice(2)}`;
+        if (nums.length <= 9) return `${nums.slice(0, 2)}-${nums.slice(2, 5)}-${nums.slice(5)}`;
+        return `${nums.slice(0, 2)}-${nums.slice(2, 6)}-${nums.slice(6, 10)}`;
+      }
+      if (nums.startsWith("1") && nums.length <= 8) {
+        if (nums.length <= 4) return nums;
+        return `${nums.slice(0, 4)}-${nums.slice(4, 8)}`;
+      }
+      if (nums.length <= 3) return nums;
+      if (nums.length <= 6) return `${nums.slice(0, 3)}-${nums.slice(3)}`;
+      if (nums.length <= 10) return `${nums.slice(0, 3)}-${nums.slice(3, 6)}-${nums.slice(6)}`;
+      return `${nums.slice(0, 3)}-${nums.slice(3, 7)}-${nums.slice(7, 11)}`;
+    }
+
+    function normalizeStatus(st) {
+      return String(st || "").replace(/\s+/g, "");
+    }
 
     function formatDateTime(isoStr) {
       if (!isoStr) return "";
@@ -150,6 +174,17 @@
         resetBtn.style.display = hasAnyActiveFilter() ? "inline-flex" : "none";
       }
       renderRecordsArea();
+    }
+
+    function setQuickStatusFilter(st) {
+      if (st === "전체") {
+        state.statusFilter = "전체";
+      } else {
+        const statusOpts = getCfg("status")?.options || [];
+        const matched = statusOpts.find(o => normalizeStatus(o) === normalizeStatus(st));
+        state.statusFilter = matched || st;
+      }
+      render();
     }
 
     function resetFilters() {
@@ -371,7 +406,7 @@
         region_sido: f.region_sido?.value || "",
         region_sigun: f.region_sigun?.value.trim() || "",
         address_detail: f.address_detail?.value.trim() || "",
-        phone: f.phone?.value.trim() || "",
+        phone: formatKoreanPhone(f.phone?.value.trim() || ""),
         model_name: f.model_name?.value.trim() || "",
         symptom_category: f.symptom_category?.value || "",
         symptom_detail: f.symptom_detail?.value.trim() || "",
@@ -385,7 +420,7 @@
         replaced_parts: f.replaced_parts?.value.trim() || "",
         replacement_type: f.replacement_type?.value || "",
         dealer_name: f.dealer_name?.value.trim() || "",
-        dealer_phone: f.dealer_phone?.value.trim() || "",
+        dealer_phone: formatKoreanPhone(f.dealer_phone?.value.trim() || ""),
         payment_type: f.payment_type?.value || "현금",
         repair_cost: parseInt(f.repair_cost?.value || 0, 10),
         parts_cost: parseInt(f.parts_cost?.value || 0, 10),
@@ -476,26 +511,32 @@
       return sum;
     }
 
+    function matchesBaseFilters(r) {
+      if (state.sidoFilter !== "전체" && r.region_sido !== state.sidoFilter) return false;
+      if (state.modelFilter !== "전체" && (r.model_name || "") !== state.modelFilter) return false;
+      if (state.visitorFilter !== "전체" && (r.visitor || "") !== state.visitorFilter) return false;
+
+      if (state.dateFrom || state.dateTo) {
+        const dVal = getLocalDateStr(r, state.dateFilterKey);
+        if (!dVal) return false;
+        if (state.dateFrom && dVal < state.dateFrom) return false;
+        if (state.dateTo && dVal > state.dateTo) return false;
+      }
+
+      if (state.search) {
+        const q = state.search.toLowerCase().trim();
+        const qDigits = q.replace(/-/g, "");
+        const target = `${r.customer_name} ${r.phone} ${r.dealer_phone} ${r.model_name} ${r.serial_number} ${r.dealer_name} ${r.visitor} ${r.region_sido} ${r.region_sigun} ${r.address_detail} ${r.symptom_detail} ${r.created_by}`.toLowerCase();
+        const phoneDigits = `${r.phone || ""} ${r.dealer_phone || ""}`.replace(/-/g, "");
+        if (!target.includes(q) && !(qDigits && phoneDigits.includes(qDigits))) return false;
+      }
+      return true;
+    }
+
     function getFilteredRecords() {
       const filtered = state.records.filter(r => {
-        if (state.statusFilter !== "전체" && r.status !== state.statusFilter) return false;
-        if (state.sidoFilter !== "전체" && r.region_sido !== state.sidoFilter) return false;
-        if (state.modelFilter !== "전체" && (r.model_name || "") !== state.modelFilter) return false;
-        if (state.visitorFilter !== "전체" && (r.visitor || "") !== state.visitorFilter) return false;
-
-        if (state.dateFrom || state.dateTo) {
-          const dVal = getLocalDateStr(r, state.dateFilterKey);
-          if (!dVal) return false;
-          if (state.dateFrom && dVal < state.dateFrom) return false;
-          if (state.dateTo && dVal > state.dateTo) return false;
-        }
-
-        if (state.search) {
-          const q = state.search.toLowerCase();
-          const target = `${r.customer_name} ${r.phone} ${r.model_name} ${r.serial_number} ${r.dealer_name} ${r.visitor} ${r.region_sigun} ${r.address_detail} ${r.symptom_detail} ${r.created_by}`.toLowerCase();
-          if (!target.includes(q)) return false;
-        }
-        return true;
+        if (state.statusFilter !== "전체" && normalizeStatus(r.status) !== normalizeStatus(state.statusFilter)) return false;
+        return matchesBaseFilters(r);
       });
 
       const key = state.sortKey;
@@ -605,7 +646,7 @@
     }
 
     function statusBadge(st) {
-      const clean = (st || "").replace(/\s+/g, "");
+      const clean = normalizeStatus(st);
       if (clean === "접수") return "bg-blue-100 text-blue-700";
       if (clean === "부품대기") return "bg-red-100 text-red-700";
       if (clean === "처리완료") return "bg-green-100 text-green-700";
@@ -615,7 +656,7 @@
     }
 
     function urgencyBadge(ug) {
-      const clean = (ug || "").replace(/\s+/g, "");
+      const clean = normalizeStatus(ug);
       if (clean === "매우긴급" || clean === "최긴급") return "bg-red-600 text-white";
       if (clean === "다소긴급" || clean === "긴급") return "bg-orange-100 text-orange-700";
       if (clean === "낮음") return "bg-sky-100 text-sky-700";
@@ -668,11 +709,41 @@
     }
 
     function buildRecordsHtml() {
+      const baseFiltered = state.records.filter(matchesBaseFilters);
       const filtered = getFilteredRecords();
+
+      const totalCnt = baseFiltered.length;
+      const receiptCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "접수").length;
+      const partsWaitCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "부품대기").length;
+      const doneCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "처리완료").length;
+
+      const activeNorm = normalizeStatus(state.statusFilter);
+
       return `
-        <div class="text-xs text-gray-500 mb-2 px-1 flex justify-between items-center">
-          <div>총 <b>${filtered.length}</b>건 조회됨 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
+        <!-- 상단 요약 현황판 (클릭 시 상태 바로 필터) -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-3.5 py-2.5 mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
+            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "전체" ? "bg-gray-800 text-white shadow-xs" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}">
+              전체 <b>${totalCnt}</b>건
+            </button>
+            <span class="text-gray-300">/</span>
+            <button type="button" onclick="setQuickStatusFilter('접수')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "접수" ? "bg-blue-600 text-white shadow-xs" : "bg-blue-50 text-blue-700 hover:bg-blue-100"}">
+              접수 <b>${receiptCnt}</b>건
+            </button>
+            <span class="text-gray-300">/</span>
+            <button type="button" onclick="setQuickStatusFilter('부품대기')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "부품대기" ? "bg-red-600 text-white shadow-xs" : "bg-red-50 text-red-700 hover:bg-red-100"}">
+              부품대기 <b>${partsWaitCnt}</b>건
+            </button>
+            <span class="text-gray-300">/</span>
+            <button type="button" onclick="setQuickStatusFilter('처리완료')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "처리완료" ? "bg-green-600 text-white shadow-xs" : "bg-green-50 text-green-700 hover:bg-green-100"}">
+              처리완료 <b>${doneCnt}</b>건
+            </button>
+          </div>
           <div class="text-[11px] text-emerald-600 font-medium">● 실시간 동기화 연결됨</div>
+        </div>
+
+        <div class="text-xs text-gray-500 mb-2 px-1 flex justify-between items-center">
+          <div>현재 목록 <b>${filtered.length}</b>건 표시 중 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
         </div>
 
         <!-- PC 화면: 표(테이블) 뷰 -->
@@ -858,9 +929,9 @@
 
         <!-- 검색 및 필터 바 -->
         <main class="max-w-7xl mx-auto p-4 pb-24">
-          <div class="bg-white p-3 rounded-xl shadow-sm mb-4 space-y-2.5">
+          <div class="bg-white p-3 rounded-xl shadow-sm mb-3 space-y-2.5">
             <div class="flex gap-2 items-center">
-              <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처, 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처(하이픈 없이도 가능), 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>
               <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">+ 새 AS 접수</button>
             </div>
@@ -1001,6 +1072,7 @@
       const nameAttr = cfg.is_system ? cfg.field_key : `custom_${cfg.field_key}`;
       const reqAttr = isRequired ? "required" : "";
       const fullSpan = (cfg.field_key === "address_detail" || cfg.field_type === "textarea") ? "col-span-2" : "";
+      const isPhone = PHONE_KEYS.includes(cfg.field_key);
 
       let inputHtml = "";
       if (cfg.field_type === "select") {
@@ -1015,6 +1087,9 @@
         inputHtml = `<input type="date" name="${nameAttr}" value="${val}" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
       } else if (cfg.field_type === "textarea" || TEXTAREA_KEYS.includes(cfg.field_key)) {
         inputHtml = `<textarea name="${nameAttr}" rows="2" ${reqAttr} class="w-full border rounded-lg px-3 py-2">${val}</textarea>`;
+      } else if (isPhone) {
+        const formattedPhone = formatKoreanPhone(val);
+        inputHtml = `<input type="tel" name="${nameAttr}" value="${formattedPhone}" oninput="this.value=formatKoreanPhone(this.value)" placeholder="숫자만 입력 (자동 하이픈)" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
       } else {
         inputHtml = `<input type="text" name="${nameAttr}" value="${val}" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
       }
