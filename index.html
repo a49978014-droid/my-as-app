@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>AS 접수 관리 대장</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; background: #f3f4f6; }
+  </style>
+</head>
+<body class="text-gray-800">
+  <div id="app"></div>
+
+  <script>
+    // ==========================================
+    // [중요] 아래 두 줄의 따옴표 안에 2단계에서 복사한 값을 붙여넣으세요!
+    // ==========================================
+    const SUPABASE_URL = "https://egntrwdxehqyyntjuczr.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnbnRyd2R4ZWhxeXludGp1Y3pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU1NzI2MjMsImV4cCI6MjExMTE0ODYyM30.DCeVvGoJ7m41FhNPH39dLzogrTsdq6QiAoRgsT7CgH0";
+
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let state = {
+      user: null,
+      username: "",
+      records: [],
+      configs: [],
+      search: "",
+      statusFilter: "전체",
+      sidoFilter: "전체",
+      modalOpen: false,
+      configModalOpen: false,
+      pwModalOpen: false,
+      editingRecord: null
+    };
+
+    const SIDO_LIST = ["서울","경기","인천","강원","충북","충남","대전","세종","전북","전남","광주","경북","경남","대구","울산","부산","제주"];
+
+    async function init() {
+      const { data: { session } } = await sb.auth.getSession();
+      if (session) {
+        const { data: prof } = await sb.from("team_profiles").select("username").eq("user_id", session.user.id).single();
+        state.user = session.user;
+        state.username = prof ? prof.username : session.user.email.split("@")[0];
+        await loadAllData();
+      }
+      render();
+    }
+
+    async function loadAllData() {
+      const [recRes, cfgRes] = await Promise.all([
+        sb.from("as_records").select("*").order("receipt_date", { ascending: false }).order("created_at", { ascending: false }),
+        sb.from("field_configs").select("*").order("sort_order", { ascending: true })
+      ]);
+      state.records = recRes.data || [];
+      state.configs = cfgRes.data || [];
+    }
+
+    async function handleLogin(e) {
+      e.preventDefault();
+      const nameInput = document.getElementById("loginName").value.trim();
+      const pwInput = document.getElementById("loginPw").value;
+      if (!nameInput || !pwInput) return alert("이름과 비밀번호를 입력하세요.");
+
+      const { data: prof, error: profErr } = await sb.from("team_profiles").select("email").eq("username", nameInput).single();
+      if (profErr || !prof) return alert("등록되지 않은 팀원 이름입니다.");
+
+      const { data, error } = await sb.auth.signInWithPassword({ email: prof.email, password: pwInput });
+      if (error) return alert("비밀번호가 일치하지 않습니다.");
+
+      state.user = data.user;
+      state.username = nameInput;
+      await loadAllData();
+      render();
+    }
+
+    async function handleLogout() {
+      await sb.auth.signOut();
+      state.user = null;
+      state.username = "";
+      render();
+    }
+
+    async function handleChangePassword(e) {
+      e.preventDefault();
+      const newPw = document.getElementById("newPwInput").value;
+      if (newPw.length < 6) return alert("비밀번호는 6자리 이상으로 입력하세요.");
+      const { error } = await sb.auth.updateUser({ password: newPw });
+      if (error) return alert("변경 실패: " + error.message);
+      alert("비밀번호가 성공적으로 변경되었습니다!");
+      state.pwModalOpen = false;
+      render();
+    }
+
+    function openForm(record = null) {
+      state.editingRecord = record;
+      state.modalOpen = true;
+      render();
+    }
+
+    async function saveRecord(e) {
+      e.preventDefault();
+      const f = e.target;
+      const customFields = {};
+      state.configs.filter(c => !c.is_system).forEach(c => {
+        customFields[c.field_key] = f["custom_" + c.field_key]?.value || "";
+      });
+
+      const payload = {
+        customer_name: f.customer_name.value.trim(),
+        receipt_date: f.receipt_date.value || new Date().toISOString().slice(0,10),
+        status: f.status.value,
+        visit_date: f.visit_date.value || null,
+        region_sido: f.region_sido.value,
+        region_sigun: f.region_sigun.value.trim(),
+        address_detail: f.address_detail.value.trim(),
+        phone: f.phone.value.trim(),
+        model_name: f.model_name.value.trim(),
+        symptom_category: f.symptom_category.value,
+        symptom_detail: f.symptom_detail.value.trim(),
+        repair_note: f.repair_note.value.trim(),
+        repair_cost: parseInt(f.repair_cost.value || 0, 10),
+        parts_cost: parseInt(f.parts_cost.value || 0, 10),
+        custom_fields: customFields,
+        updated_by: state.username,
+        updated_at: new Date().toISOString()
+      };
+
+      if (state.editingRecord) {
+        const { error } = await sb.from("as_records").update(payload).eq("id", state.editingRecord.id);
+        if (error) return alert("수정 오류: " + error.message);
+      } else {
+        payload.created_by = state.username;
+        const { error } = await sb.from("as_records").insert([payload]);
+        if (error) return alert("등록 오류: " + error.message);
+      }
+
+      state.modalOpen = false;
+      state.editingRecord = null;
+      await loadAllData();
+      render();
+    }
+
+    async function deleteRecord(id) {
+      if (!confirm("정말 이 AS 내역을 삭제할까요?")) return;
+      await sb.from("as_records").delete().eq("id", id);
+      state.modalOpen = false;
+      await loadAllData();
+      render();
+    }
+
+    async function addNewField(e) {
+      e.preventDefault();
+      const label = document.getElementById("newFieldLabel").value.trim();
+      const type = document.getElementById("newFieldType").value;
+      const optsRaw = document.getElementById("newFieldOpts").value.trim();
+      if (!label) return alert("항목 이름을 입력하세요.");
+
+      const key = "field_" + Date.now();
+      const options = type === "select" ? optsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+      const { error } = await sb.from("field_configs").insert([{
+        field_key: key, field_label: label, field_type: type, options, is_system: false, sort_order: state.configs.length + 1
+      }]);
+      if (error) return alert("항목 추가 오류: " + error.message);
+      await loadAllData();
+      render();
+    }
+
+    async function updateSystemOptions(id, optsStr) {
+      const options = optsStr.split(",").map(s => s.trim()).filter(Boolean);
+      await sb.from("field_configs").update({ options }).eq("id", id);
+      await loadAllData();
+      alert("선택 목록이 저장되었습니다.");
+      render();
+    }
+
+    async function deleteCustomField(id) {
+      if (!confirm("이 추가 항목을 삭제할까요?")) return;
+      await sb.from("field_configs").delete().eq("id", id);
+      await loadAllData();
+      render();
+    }
+
+    function getFilteredRecords() {
+      return state.records.filter(r => {
+        if (state.statusFilter !== "전체" && r.status !== state.statusFilter) return false;
+        if (state.sidoFilter !== "전체" && r.region_sido !== state.sidoFilter) return false;
+        if (state.search) {
+          const q = state.search.toLowerCase();
+          const target = `${r.customer_name} ${r.phone} ${r.model_name} ${r.region_sigun} ${r.address_detail} ${r.symptom_detail} ${r.created_by}`.toLowerCase();
+          if (!target.includes(q)) return false;
+        }
+        return true;
+      });
+    }
+
+    function exportCSV() {
+      const rows = getFilteredRecords();
+      const customCols = state.configs.filter(c => !c.is_system);
+      const headers = ["접수일","진행상태","고객명","연락처","출장예정일","시/도","시/군","상세주소","모델","증상분류","접수시증상","처리내용","수리비","부품비","합계금액", ...customCols.map(c => c.field_label), "최초작성자","최종수정자"];
+      const csvLines = [headers.join(",")];
+
+      rows.forEach(r => {
+        const line = [
+          r.receipt_date, r.status, r.customer_name, r.phone, r.visit_date || "",
+          r.region_sido, r.region_sigun, r.address_detail, r.model_name, r.symptom_category,
+          r.symptom_detail, r.repair_note, r.repair_cost, r.parts_cost, r.total_cost,
+          ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
+          r.created_by, r.updated_by || ""
+        ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`);
+        csvLines.push(line.join(","));
+      });
+
+      const blob = new Blob(["\uFEFF" + csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `AS접수대장_${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+    }
+
+    function statusBadge(st) {
+      const map = {
+        "접수": "bg-red-100 text-red-700",
+        "처리중": "bg-blue-100 text-blue-700",
+        "대기중": "bg-yellow-100 text-yellow-800",
+        "처리완료": "bg-green-100 text-green-700",
+        "보류": "bg-gray-200 text-gray-700"
+      };
+      return map[st] || "bg-purple-100 text-purple-700";
+    }
+
+    function calcModalTotal() {
+      const r = parseInt(document.getElementById("inpRepairCost")?.value || 0, 10);
+      const p = parseInt(document.getElementById("inpPartsCost")?.value || 0, 10);
+      const el = document.getElementById("modalTotalDisplay");
+      if (el) el.innerText = (r + p).toLocaleString() + "원";
+    }
+
+    function render() {
+      const app = document.getElementById("app");
+      if (!state.user) {
+        app.innerHTML = `
+          <div class="min-h-screen flex items-center justify-center p-4">
+            <form onsubmit="handleLogin(event)" class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-sm space-y-5">
+              <div class="text-center">
+                <h1 class="text-2xl font-bold text-gray-900">AS 접수 대장</h1>
+                <p class="text-sm text-gray-500 mt-1">팀원 이름으로 로그인하세요</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">아이디 (팀원 이름)</label>
+                <input id="loginName" type="text" placeholder="예: 홍길동" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">비밀번호</label>
+                <input id="loginPw" type="password" placeholder="비밀번호 입력" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+              </div>
+              <button type="submit" class="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg hover:bg-blue-700">로그인</button>
+            </form>
+          </div>`;
+        return;
+      }
+
+      const filtered = getFilteredRecords();
+      const statusCfg = state.configs.find(c => c.field_key === "status") || { options: ["접수","처리중","대기중","처리완료"] };
+      const symptomCfg = state.configs.find(c => c.field_key === "symptom_category") || { options: ["기타"] };
+      const customCols = state.configs.filter(c => !c.is_system);
+
+      app.innerHTML = `
+        <!-- 상단 바 -->
+        <header class="bg-white border-b sticky top-0 z-20">
+          <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-lg text-blue-600">AS 접수 대장</span>
+              <span class="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-full font-medium">${state.username}님</span>
+            </div>
+            <div class="flex items-center gap-2 text-sm">
+              <button onclick="state.configModalOpen=true;render()" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">⚙️ 항목관리</button>
+              <button onclick="exportCSV()" class="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-medium">📥 엑셀다운</button>
+              <button onclick="state.pwModalOpen=true;render()" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg">비번변경</button>
+              <button onclick="handleLogout()" class="px-3 py-1.5 text-gray-500 hover:text-red-600">로그아웃</button>
+            </div>
+          </div>
+        </header>
+
+        <!-- 검색 및 필터 바 -->
+        <main class="max-w-7xl mx-auto p-4 pb-24">
+          <div class="bg-white p-3 rounded-xl shadow-sm mb-4 flex flex-wrap gap-2 items-center">
+            <input type="text" value="${state.search}" oninput="state.search=this.value;render()" placeholder="고객명, 연락처, 모델, 지역, 증상 검색..." class="flex-1 min-w-[200px] border rounded-lg px-3 py-2 text-sm" />
+            <select onchange="state.statusFilter=this.value;render()" class="border rounded-lg px-3 py-2 text-sm bg-white">
+              <option value="전체" ${state.statusFilter==="전체"?"selected":""}>상태: 전체</option>
+              ${statusCfg.options.map(o => `<option value="${o}" ${state.statusFilter===o?"selected":""}>${o}</option>`).join("")}
+            </select>
+            <select onchange="state.sidoFilter=this.value;render()" class="border rounded-lg px-3 py-2 text-sm bg-white">
+              <option value="전체" ${state.sidoFilter==="전체"?"selected":""}>지역: 전체</option>
+              ${SIDO_LIST.map(s => `<option value="${s}" ${state.sidoFilter===s?"selected":""}>${s}</option>`).join("")}
+            </select>
+            <button onclick="openForm()" class="hidden md:inline-flex bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">+ 새 AS 접수</button>
+          </div>
+
+          <div class="text-xs text-gray-500 mb-2 px-1">총 <b>${filtered.length}</b>건 조회됨</div>
+
+          <!-- PC 화면: 표(테이블) 뷰 -->
+          <div class="hidden md:block bg-white rounded-xl shadow-sm overflow-x-auto">
+            <table class="w-full text-sm text-left whitespace-nowrap">
+              <thead class="bg-gray-50 border-b text-gray-600">
+                <tr>
+                  <th class="p-3">상태</th>
+                  <th class="p-3">접수일</th>
+                  <th class="p-3">출장예정일</th>
+                  <th class="p-3">고객명</th>
+                  <th class="p-3">연락처</th>
+                  <th class="p-3">지역</th>
+                  <th class="p-3">모델</th>
+                  <th class="p-3">증상분류</th>
+                  <th class="p-3">접수시 증상</th>
+                  <th class="p-3 text-right">합계금액</th>
+                  <th class="p-3">작성/수정자</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y">
+                ${filtered.map(r => `
+                  <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-blue-50 cursor-pointer">
+                    <td class="p-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${statusBadge(r.status)}">${r.status}</span></td>
+                    <td class="p-3">${r.receipt_date || ""}</td>
+                    <td class="p-3 text-blue-600 font-medium">${r.visit_date || "-"}</td>
+                    <td class="p-3 font-bold">${r.customer_name}</td>
+                    <td class="p-3">${r.phone || ""}</td>
+                    <td class="p-3">${r.region_sido || ""} ${r.region_sigun || ""}</td>
+                    <td class="p-3">${r.model_name || ""}</td>
+                    <td class="p-3">${r.symptom_category || ""}</td>
+                    <td class="p-3 max-w-xs truncate">${r.symptom_detail || ""}</td>
+                    <td class="p-3 text-right font-semibold">${(r.total_cost || 0).toLocaleString()}원</td>
+                    <td class="p-3 text-xs text-gray-500">작성: ${r.created_by}${r.updated_by ? ` / 수정: ${r.updated_by}` : ""}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 모바일 화면: 한 손 조작 카드 뷰 -->
+          <div class="md:hidden space-y-3">
+            ${filtered.map(r => `
+              <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 active:bg-blue-50">
+                <div class="flex justify-between items-start mb-2">
+                  <div>
+                    <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${statusBadge(r.status)}">${r.status}</span>
+                    <span class="font-bold text-base ml-1.5">${r.customer_name}</span>
+                  </div>
+                  <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
+                </div>
+                <div class="text-sm text-gray-700 space-y-1">
+                  <div>📍 ${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}</div>
+                  <div>🔧 <b>${r.model_name || "모델미입력"}</b> · ${r.symptom_category || ""}</div>
+                  <div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">${r.symptom_detail || "증상 내용 없음"}</div>
+                </div>
+                <div class="mt-3 pt-2 border-t flex justify-between items-center text-xs">
+                  <div class="text-gray-500">
+                    ${r.visit_date ? `<span class="text-blue-600 font-semibold">출장: ${r.visit_date}</span> · ` : ""}
+                    작성:${r.created_by}${r.updated_by ? ` / 수정:${r.updated_by}` : ""}
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="font-bold text-sm text-gray-900">${(r.total_cost || 0).toLocaleString()}원</span>
+                    ${r.phone ? `<a href="tel:${r.phone}" onclick="event.stopPropagation()" class="bg-green-500 text-white px-2.5 py-1 rounded-lg font-semibold">📞 전화</a>` : ""}
+                  </div>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </main>
+
+        <!-- 모바일 하단 고정 + 접수 버튼 -->
+        <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-blue-600 text-white px-5 py-3.5 rounded-full shadow-xl font-bold text-base z-20">+ AS 접수</button>
+
+        <!-- 접수/수정 모달 창 -->
+        ${state.modalOpen ? renderFormModal(statusCfg, symptomCfg, customCols) : ""}
+
+        <!-- 항목 및 옵션 관리 모달 창 -->
+        ${state.configModalOpen ? renderConfigModal() : ""}
+
+        <!-- 비밀번호 변경 모달 창 -->
+        ${state.pwModalOpen ? `
+          <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <form onsubmit="handleChangePassword(event)" class="bg-white rounded-2xl p-6 w-full max-w-sm space-y-4">
+              <h2 class="font-bold text-lg">내 비밀번호 변경 (${state.username})</h2>
+              <input id="newPwInput" type="password" placeholder="새 비밀번호 (6자리 이상)" class="w-full border rounded-lg px-3 py-2" required />
+              <div class="flex justify-end gap-2">
+                <button type="button" onclick="state.pwModalOpen=false;render()" class="px-4 py-2 bg-gray-100 rounded-lg">취소</button>
+                <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold">변경하기</button>
+              </div>
+            </form>
+          </div>` : ""}
+      `;
+    }
+
+    function renderFormModal(statusCfg, symptomCfg, customCols) {
+      const r = state.editingRecord || {};
+      const today = new Date().toISOString().slice(0, 10);
+      const total = (r.repair_cost || 0) + (r.parts_cost || 0);
+
+      return `
+        <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
+          <form onsubmit="saveRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
+            <div class="flex justify-between items-center border-b pb-3">
+              <h2 class="font-bold text-lg">${r.id ? "AS 내역 상세 / 수정" : "새 AS 접수 등록"}</h2>
+              <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
+            </div>
+
+            ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">최초 작성: <b>${r.created_by}</b> (${r.created_at?.slice(0,16).replace("T"," ")}) / 최종 수정: <b>${r.updated_by || "-"}</b></div>` : ""}
+
+            <div class="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <label class="block font-medium mb-1">고객명 *</label>
+                <input name="customer_name" value="${r.customer_name || ""}" required class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">진행 상태</label>
+                <select name="status" class="w-full border rounded-lg px-3 py-2 bg-white">
+                  ${statusCfg.options.map(o => `<option value="${o}" ${(r.status || "접수")===o?"selected":""}>${o}</option>`).join("")}
+                </select>
+              </div>
+              <div>
+                <label class="block font-medium mb-1">접수일</label>
+                <input type="date" name="receipt_date" value="${r.receipt_date || today}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">출장 예정일</label>
+                <input type="date" name="visit_date" value="${r.visit_date || ""}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">연락처</label>
+                <input name="phone" value="${r.phone || ""}" placeholder="010-0000-0000" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">모델명</label>
+                <input name="model_name" value="${r.model_name || ""}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">지역 (시/도)</label>
+                <select name="region_sido" class="w-full border rounded-lg px-3 py-2 bg-white">
+                  <option value="">선택</option>
+                  ${SIDO_LIST.map(s => `<option value="${s}" ${r.region_sido===s?"selected":""}>${s}</option>`).join("")}
+                </select>
+              </div>
+              <div>
+                <label class="block font-medium mb-1">지역 (시/군/구)</label>
+                <input name="region_sigun" value="${r.region_sigun || ""}" placeholder="예: 부천시 원미구" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+            </div>
+
+            <div class="text-sm">
+              <label class="block font-medium mb-1">상세주소</label>
+              <input name="address_detail" value="${r.address_detail || ""}" class="w-full border rounded-lg px-3 py-2" />
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div>
+                <label class="block font-medium mb-1">증상 분류</label>
+                <select name="symptom_category" class="w-full border rounded-lg px-3 py-2 bg-white">
+                  ${symptomCfg.options.map(o => `<option value="${o}" ${r.symptom_category===o?"selected":""}>${o}</option>`).join("")}
+                </select>
+              </div>
+              <div>
+                <label class="block font-medium mb-1">접수시 증상</label>
+                <input name="symptom_detail" value="${r.symptom_detail || ""}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+            </div>
+
+            <div class="text-sm">
+              <label class="block font-medium mb-1">처리 내용 (현장 조치 사항)</label>
+              <textarea name="repair_note" rows="2" class="w-full border rounded-lg px-3 py-2">${r.repair_note || ""}</textarea>
+            </div>
+
+            <!-- 수리비 / 부품비 자동 계산 -->
+            <div class="bg-blue-50 p-3 rounded-xl grid grid-cols-3 gap-2 text-sm items-end">
+              <div>
+                <label class="block font-medium text-xs mb-1">수리비 (원)</label>
+                <input id="inpRepairCost" type="number" name="repair_cost" value="${r.repair_cost || 0}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
+              </div>
+              <div>
+                <label class="block font-medium text-xs mb-1">부품비 (원)</label>
+                <input id="inpPartsCost" type="number" name="parts_cost" value="${r.parts_cost || 0}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
+              </div>
+              <div class="text-right pb-2">
+                <div class="text-xs text-gray-500">자동 합계</div>
+                <div id="modalTotalDisplay" class="font-bold text-base text-blue-700">${total.toLocaleString()}원</div>
+              </div>
+            </div>
+
+            <!-- 사용자가 추가한 동적 항목들 -->
+            ${customCols.length > 0 ? `
+              <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
+                ${customCols.map(c => {
+                  const val = (r.custom_fields && r.custom_fields[c.field_key]) || "";
+                  if (c.field_type === "select") {
+                    return `<div>
+                      <label class="block font-medium mb-1">${c.field_label}</label>
+                      <select name="custom_${c.field_key}" class="w-full border rounded-lg px-3 py-2 bg-white">
+                        <option value="">선택</option>
+                        ${c.options.map(o => `<option value="${o}" ${val===o?"selected":""}>${o}</option>`).join("")}
+                      </select>
+                    </div>`;
+                  }
+                  return `<div>
+                    <label class="block font-medium mb-1">${c.field_label}</label>
+                    <input name="custom_${c.field_key}" value="${val}" class="w-full border rounded-lg px-3 py-2" />
+                  </div>`;
+                }).join("")}
+              </div>` : ""}
+
+            <div class="flex justify-between pt-3 border-t">
+              ${r.id ? `<button type="button" onclick="deleteRecord('${r.id}')" class="px-4 py-2.5 text-red-600 bg-red-50 rounded-lg text-sm font-medium">삭제</button>` : `<div></div>`}
+              <div class="flex gap-2">
+                <button type="button" onclick="state.modalOpen=false;render()" class="px-4 py-2.5 bg-gray-100 rounded-lg text-sm">취소</button>
+                <button type="submit" class="px-6 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-bold">저장하기</button>
+              </div>
+            </div>
+          </form>
+        </div>`;
+    }
+
+    function renderConfigModal() {
+      const sysCols = state.configs.filter(c => c.is_system);
+      const customCols = state.configs.filter(c => !c.is_system);
+      return `
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div class="bg-white rounded-2xl p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-5 text-sm">
+            <div class="flex justify-between items-center border-b pb-2">
+              <h2 class="font-bold text-lg">항목 및 선택 목록 관리</h2>
+              <button onclick="state.configModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
+            </div>
+
+            <div class="space-y-3">
+              <h3 class="font-semibold text-gray-700">1. 기본 선택 항목 수정 (쉼표로 구분)</h3>
+              ${sysCols.map(c => `
+                <div class="bg-gray-50 p-3 rounded-lg space-y-1.5">
+                  <div class="font-medium">${c.field_label}</div>
+                  <div class="flex gap-2">
+                    <input id="opt_${c.id}" value="${c.options.join(", ")}" class="flex-1 border rounded px-2.5 py-1.5 bg-white" />
+                    <button onclick="updateSystemOptions('${c.id}', document.getElementById('opt_${c.id}').value)" class="px-3 py-1.5 bg-blue-600 text-white rounded font-medium">저장</button>
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+
+            <form onsubmit="addNewField(event)" class="space-y-2 border-t pt-3">
+              <h3 class="font-semibold text-gray-700">2. 새 입력 항목 추가하기</h3>
+              <div class="grid grid-cols-2 gap-2">
+                <input id="newFieldLabel" placeholder="항목명 (예: 유무상구분)" class="border rounded px-2.5 py-2" />
+                <select id="newFieldType" onchange="document.getElementById('newFieldOpts').style.display=this.value==='select'?'block':'none'" class="border rounded px-2.5 py-2 bg-white">
+                  <option value="select">선택형 (드롭다운)</option>
+                  <option value="text">직접 텍스트 입력</option>
+                </select>
+              </div>
+              <input id="newFieldOpts" placeholder="선택 옵션 입력 (쉼표로 구분: 무상, 유상, 보증만료)" class="w-full border rounded px-2.5 py-2" />
+              <button type="submit" class="w-full py-2 bg-emerald-600 text-white rounded-lg font-semibold">+ 항목 추가</button>
+            </form>
+
+            ${customCols.length > 0 ? `
+              <div class="space-y-2 border-t pt-3">
+                <h3 class="font-semibold text-gray-700">추가된 항목 목록</h3>
+                ${customCols.map(c => `
+                  <div class="flex justify-between items-center bg-gray-50 p-2.5 rounded">
+                    <div><b>${c.field_label}</b> <span class="text-xs text-gray-500">(${c.field_type === "select" ? c.options.join(", ") : "직접입력"})</span></div>
+                    <button onclick="deleteCustomField('${c.id}')" class="text-red-500 text-xs">삭제</button>
+                  </div>
+                `).join("")}
+              </div>` : ""}
+          </div>
+        </div>`;
+    }
+
+    init();
+  </script>
+</body>
+</html>
