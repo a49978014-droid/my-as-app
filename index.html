@@ -17,7 +17,7 @@
 
   <script>
     // ==========================================
-    // [중요] 아래 두 번째 줄에 아까 복사해 둔 eyJ... 암호를 붙여넣으세요!
+    // [중요] 아래 두 번째 줄에 기존에 쓰던 eyJ... 암호를 붙여넣으세요!
     // ==========================================
     const SUPABASE_URL = "https://egntrwdxehqyyntjuczr.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnbnRyd2R4ZWhxeXludGp1Y3pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU1NzI2MjMsImV4cCI6MjExMTE0ODYyM30.DCeVvGoJ7m41FhNPH39dLzogrTsdq6QiAoRgsT7CgH0";
@@ -202,15 +202,16 @@
     function exportCSV() {
       const rows = getFilteredRecords();
       const customCols = state.configs.filter(c => !c.is_system);
-      const headers = ["접수일","진행상태","고객명","연락처","출장예정일","시/도","시/군","상세주소","모델","증상분류","접수시증상","처리내용","결제구분","수리비","부품비","최종합계", ...customCols.map(c => c.field_label), "최초작성자","최종수정자"];
+      const headers = ["접수일","진행상태","고객명","연락처","출장예정일","시/도","시/군","상세주소","모델","증상분류","접수시증상","처리내용", ...customCols.map(c => c.field_label), "결제구분","수리비","부품비","최종합계","최초작성자","최종수정자"];
       const csvLines = [headers.join(",")];
 
       rows.forEach(r => {
         const line = [
           r.receipt_date, r.status, r.customer_name, r.phone, r.visit_date || "",
           r.region_sido, r.region_sigun, r.address_detail, r.model_name, r.symptom_category,
-          r.symptom_detail, r.repair_note, r.payment_type || "현금", r.repair_cost, r.parts_cost, r.total_cost,
+          r.symptom_detail, r.repair_note,
           ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
+          r.payment_type || "현금", r.repair_cost, r.parts_cost, r.total_cost,
           r.created_by, r.updated_by || ""
         ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`);
         csvLines.push(line.join(","));
@@ -524,6 +525,27 @@
               <textarea name="repair_note" rows="2" class="w-full border rounded-lg px-3 py-2">${r.repair_note || ""}</textarea>
             </div>
 
+            <!-- 사용자가 추가한 동적 항목들 (수리비 박스 위쪽 배치) -->
+            ${customCols.length > 0 ? `
+              <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
+                ${customCols.map(c => {
+                  const val = (r.custom_fields && r.custom_fields[c.field_key]) || "";
+                  if (c.field_type === "select") {
+                    return `<div>
+                      <label class="block font-medium mb-1">${c.field_label}</label>
+                      <select name="custom_${c.field_key}" class="w-full border rounded-lg px-3 py-2 bg-white">
+                        <option value="">선택</option>
+                        ${c.options.map(o => `<option value="${o}" ${val===o?"selected":""}>${o}</option>`).join("")}
+                      </select>
+                    </div>`;
+                  }
+                  return `<div>
+                    <label class="block font-medium mb-1">${c.field_label}</label>
+                    <input name="custom_${c.field_key}" value="${val}" class="w-full border rounded-lg px-3 py-2" />
+                  </div>`;
+                }).join("")}
+              </div>` : ""}
+
             <!-- 결제 구분 / 수리비 / 부품비 자동 계산 박스 -->
             <div class="bg-blue-50 p-3.5 rounded-xl space-y-3 text-sm">
               <div class="grid grid-cols-3 gap-2">
@@ -552,27 +574,6 @@
                 </div>
               </div>
             </div>
-
-            <!-- 사용자가 추가한 동적 항목들 -->
-            ${customCols.length > 0 ? `
-              <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
-                ${customCols.map(c => {
-                  const val = (r.custom_fields && r.custom_fields[c.field_key]) || "";
-                  if (c.field_type === "select") {
-                    return `<div>
-                      <label class="block font-medium mb-1">${c.field_label}</label>
-                      <select name="custom_${c.field_key}" class="w-full border rounded-lg px-3 py-2 bg-white">
-                        <option value="">선택</option>
-                        ${c.options.map(o => `<option value="${o}" ${val===o?"selected":""}>${o}</option>`).join("")}
-                      </select>
-                    </div>`;
-                  }
-                  return `<div>
-                    <label class="block font-medium mb-1">${c.field_label}</label>
-                    <input name="custom_${c.field_key}" value="${val}" class="w-full border rounded-lg px-3 py-2" />
-                  </div>`;
-                }).join("")}
-              </div>` : ""}
 
             <div class="flex justify-between pt-3 border-t">
               ${r.id ? `<button type="button" onclick="deleteRecord('${r.id}')" class="px-4 py-2.5 text-red-600 bg-red-50 rounded-lg text-sm font-medium">삭제</button>` : `<div></div>`}
