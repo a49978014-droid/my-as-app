@@ -14,6 +14,7 @@
 </head>
 <body class="text-gray-800">
   <div id="app"></div>
+  <div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-gray-900/90 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-lg z-50 transition-opacity duration-200 opacity-0 pointer-events-none"></div>
 
   <script>
     // ==========================================
@@ -48,6 +49,43 @@
 
     const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note"];
     const DATE_KEYS = ["receipt_date", "visit_date", "completed_date"];
+
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      if (!t) return;
+      t.innerText = msg;
+      t.classList.remove("opacity-0");
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => t.classList.add("opacity-0"), 2000);
+    }
+
+    async function copyText(text) {
+      const clean = (text || "").replace(/\s+/g, " ").trim();
+      if (!clean) return showToast("복사할 주소가 없습니다.");
+      try {
+        await navigator.clipboard.writeText(clean);
+        showToast("📋 주소 복사 완료: " + clean);
+      } catch (err) {
+        const ta = document.createElement("textarea");
+        ta.value = clean;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        showToast("📋 주소 복사 완료: " + clean);
+      }
+    }
+
+    function copyModalAddress() {
+      const form = document.getElementById("asRecordForm");
+      if (!form) return;
+      const sido = form.region_sido?.value || "";
+      const sigun = form.region_sigun?.value || "";
+      const detail = form.address_detail?.value || "";
+      copyText(`${sido} ${sigun} ${detail}`);
+    }
 
     async function init() {
       const { data: { session } } = await sb.auth.getSession();
@@ -431,6 +469,8 @@
             ${filtered.map(r => {
               const pt = r.payment_type || "현금";
               const ug = r.urgency || "일반";
+              const fullAddr = `${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}`.replace(/\s+/g, " ").trim();
+              const safeAddr = fullAddr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
               return `
               <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 active:bg-blue-50">
                 <div class="flex justify-between items-start mb-2">
@@ -441,8 +481,11 @@
                   </div>
                   <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
                 </div>
-                <div class="text-sm text-gray-700 space-y-1">
-                  <div>📍 ${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}</div>
+                <div class="text-sm text-gray-700 space-y-1.5">
+                  <div class="flex items-start justify-between gap-2">
+                    <span class="flex-1 leading-snug">📍 ${fullAddr || "주소 미입력"}</span>
+                    ${fullAddr ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-gray-100 active:bg-blue-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded-md text-xs font-semibold">📋 복사</button>` : ""}
+                  </div>
                   <div>🔧 <b>${r.model_name || "모델미입력"}</b> ${r.serial_number ? `(${r.serial_number})` : ""} · ${r.symptom_category || ""}</div>
                   ${r.dealer_name ? `<div class="text-xs text-gray-500">🏢 대리점: ${r.dealer_name} ${r.dealer_phone ? `(${r.dealer_phone})` : ""}</div>` : ""}
                   <div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">${r.symptom_detail || "증상 내용 없음"}</div>
@@ -515,9 +558,16 @@
         inputHtml = `<input type="text" name="${nameAttr}" value="${val}" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
       }
 
+      const copyBtn = cfg.field_key === "address_detail"
+        ? `<button type="button" onclick="copyModalAddress()" class="text-xs bg-gray-100 hover:bg-blue-50 text-blue-600 border border-gray-200 px-2 py-0.5 rounded font-semibold">📋 전체주소 복사</button>`
+        : "";
+
       return `
         <div class="${fullSpan}">
-          <label class="block font-medium mb-1">${cfg.field_label}${isRequired ? " *" : ""}</label>
+          <div class="flex justify-between items-center mb-1">
+            <label class="block font-medium">${cfg.field_label}${isRequired ? " *" : ""}</label>
+            ${copyBtn}
+          </div>
           ${inputHtml}
         </div>`;
     }
@@ -526,7 +576,6 @@
       const r = state.editingRecord || {};
       const today = new Date().toISOString().slice(0, 10);
 
-      // 요청하신 23개 순서대로 정렬
       const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
       const customCols = state.configs.filter(c => !c.is_system);
 
@@ -541,7 +590,7 @@
 
       return `
         <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
-          <form onsubmit="saveRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
+          <form id="asRecordForm" onsubmit="saveRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
             <div class="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
               <h2 class="font-bold text-lg">${r.id ? "AS 내역 상세 / 수정" : "새 AS 접수 등록"}</h2>
               <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
@@ -549,7 +598,6 @@
 
             ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">최초 작성: <b>${r.created_by}</b> (${r.created_at?.slice(0,16).replace("T"," ")}) / 최종 수정: <b>${r.updated_by || "-"}</b></div>` : ""}
 
-            <!-- 요청하신 순서대로 23개 항목 렌더링 -->
             <div class="grid grid-cols-2 gap-3 text-sm">
               ${sysCols.map(c => {
                 let val = r[c.field_key] ?? "";
@@ -562,7 +610,6 @@
               }).join("")}
             </div>
 
-            <!-- 사용자가 항목관리에서 추가한 동적 항목들 (금액 박스 위쪽 배치) -->
             ${customCols.length > 0 ? `
               <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
                 ${customCols.map(c => {
@@ -571,7 +618,6 @@
                 }).join("")}
               </div>` : ""}
 
-            <!-- 결제 구분 / 수리비 / 부품비 자동 계산 박스 -->
             <div class="bg-blue-50 p-3.5 rounded-xl space-y-3 text-sm">
               <div class="grid grid-cols-3 gap-2">
                 <div>
@@ -647,7 +693,6 @@
               <button onclick="state.configModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
             </div>
 
-            <!-- 새 항목 추가 -->
             <form onsubmit="addNewField(event)" class="bg-emerald-50/70 p-3.5 rounded-xl space-y-2 border border-emerald-200">
               <h3 class="font-bold text-emerald-900">+ 새 입력 항목 추가하기 (금액 박스 위에 표시됨)</h3>
               <div class="grid grid-cols-2 gap-2">
@@ -661,14 +706,12 @@
               <button type="submit" class="w-full py-2 bg-emerald-600 text-white rounded-lg font-semibold">새 항목 추가</button>
             </form>
 
-            <!-- 추가된 항목 목록 -->
             ${customCols.length > 0 ? `
               <div class="space-y-2">
                 <h3 class="font-bold text-gray-700">추가된 항목 설정</h3>
                 ${customCols.map(renderConfigRow).join("")}
               </div>` : ""}
 
-            <!-- 기존 23개 항목 방식 전환 및 옵션 수정 -->
             <div class="space-y-2 border-t pt-3">
               <h3 class="font-bold text-gray-700">기존 항목 입력 방식 전환 및 선택 목록 수정</h3>
               <p class="text-xs text-gray-500">각 항목의 방식을 [직접 입력] 또는 [선택형]으로 바꾼 뒤 '적용'을 누르세요.</p>
