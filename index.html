@@ -25,6 +25,8 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnbnRyd2R4ZWhxeXludGp1Y3pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU1NzI2MjMsImV4cCI6MjExMTE0ODYyM30.DCeVvGoJ7m41FhNPH39dLzogrTsdq6QiAoRgsT7CgH0";
 
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const SAVED_CREDS_KEY = "as_app_saved_creds_v1";
+    let realtimeChannel = null;
 
     let state = {
       user: null,
@@ -36,13 +38,20 @@
       sidoFilter: "전체",
       modelFilter: "전체",
       visitorFilter: "전체",
+      dateFilterKey: "receipt_date",
+      dateFrom: "",
+      dateTo: "",
+      exportDateKey: "receipt_date",
+      exportDateFrom: "",
+      exportDateTo: "",
       sortKey: "created_at",
       sortDir: "desc",
       modalOpen: false,
       configModalOpen: false,
       pwModalOpen: false,
       exportModalOpen: false,
-      editingRecord: null
+      editingRecord: null,
+      isSyncing: false
     };
 
     const SYSTEM_KEYS = [
@@ -66,13 +75,25 @@
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
 
+    function getLocalDateStr(record, key) {
+      const val = record[key];
+      if (!val) return "";
+      if (key === "created_at") {
+        const d = new Date(val);
+        if (isNaN(d.getTime())) return String(val).slice(0, 10);
+        const pad = n => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      }
+      return String(val).slice(0, 10);
+    }
+
     function showToast(msg) {
       const t = document.getElementById("toast");
       if (!t) return;
       t.innerText = msg;
       t.classList.remove("opacity-0");
       clearTimeout(window._toastTimer);
-      window._toastTimer = setTimeout(() => t.classList.add("opacity-0"), 2000);
+      window._toastTimer = setTimeout(() => t.classList.add("opacity-0"), 2200);
     }
 
     async function copyText(text) {
@@ -103,12 +124,38 @@
       copyText(`${sido} ${sigun} ${detail}`);
     }
 
+    function hasAnyActiveFilter() {
+      return Boolean(
+        state.search ||
+        state.statusFilter !== "전체" ||
+        state.sidoFilter !== "전체" ||
+        state.modelFilter !== "전체" ||
+        state.visitorFilter !== "전체" ||
+        state.dateFrom ||
+        state.dateTo ||
+        state.sortKey !== "created_at" ||
+        state.sortDir !== "desc"
+      );
+    }
+
+    function handleSearchInput(val) {
+      state.search = val;
+      const resetBtn = document.getElementById("resetFilterBtn");
+      if (resetBtn) {
+        resetBtn.style.display = hasAnyActiveFilter() ? "inline-flex" : "none";
+      }
+      renderRecordsArea();
+    }
+
     function resetFilters() {
       state.search = "";
       state.statusFilter = "전체";
       state.sidoFilter = "전체";
       state.modelFilter = "전체";
       state.visitorFilter = "전체";
+      state.dateFilterKey = "receipt_date";
+      state.dateFrom = "";
+      state.dateTo = "";
       state.sortKey = "created_at";
       state.sortDir = "desc";
       render();
@@ -121,14 +168,60 @@
         state.sortKey = key;
         state.sortDir = (DATE_KEYS.includes(key) || NUMBER_KEYS.includes(key) || key === "urgency") ? "desc" : "asc";
       }
-      render();
+      renderRecordsArea();
     }
 
     function setMobileSort(val) {
       const [key, dir] = val.split(":");
       state.sortKey = key;
       state.sortDir = dir;
+      renderRecordsArea();
+    }
+
+    function setupRealtimeSync() {
+      if (realtimeChannel) {
+        sb.removeChannel(realtimeChannel);
+      }
+      realtimeChannel = sb
+        .channel("as_realtime_sync")
+        .on("postgres_changes", { event: "*", schema: "public", table: "as_records" }, async () => {
+          await loadAllData(true);
+          if (state.modalOpen || state.configModalOpen || state.exportModalOpen || state.pwModalOpen) {
+            renderRecordsArea();
+          } else {
+            render();
+          }
+          showToast("🔔 다른 팀원의 변경사항이 실시간 반영되었습니다");
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "field_configs" }, async () => {
+          await loadAllData(true);
+          if (!state.modalOpen && !state.configModalOpen) {
+            render();
+          }
+        })
+        .subscribe();
+    }
+
+    document.addEventListener("visibilitychange", async () => {
+      if (document.visibilityState === "visible" && state.user) {
+        await loadAllData(true);
+        if (state.modalOpen || state.configModalOpen || state.exportModalOpen || state.pwModalOpen) {
+          renderRecordsArea();
+        } else {
+          render();
+        }
+      }
+    });
+
+    async function manualRefresh() {
+      if (state.isSyncing) return;
+      state.isSyncing = true;
+      const btn = document.getElementById("refreshBtn");
+      if (btn) btn.innerText = "⏳ 동기화중...";
+      await loadAllData(true);
+      state.isSyncing = false;
       render();
+      showToast("🔄 최신 내역으로 새로고침 완료");
     }
 
     async function init() {
@@ -138,23 +231,34 @@
         state.user = session.user;
         state.username = prof ? prof.username : session.user.email.split("@")[0];
         await loadAllData();
+        setupRealtimeSync();
       }
       render();
     }
 
-    async function loadAllData() {
+    async function loadAllData(silent = false) {
       const [recRes, cfgRes] = await Promise.all([
         sb.from("as_records").select("*").order("created_at", { ascending: false }),
         sb.from("field_configs").select("*").order("sort_order", { ascending: true })
       ]);
-      state.records = recRes.data || [];
-      state.configs = cfgRes.data || [];
+      if (recRes.data) state.records = recRes.data;
+      if (cfgRes.data) state.configs = cfgRes.data;
+    }
+
+    function getSavedCredentials() {
+      try {
+        const raw = localStorage.getItem(SAVED_CREDS_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) {
+        return null;
+      }
     }
 
     async function handleLogin(e) {
       e.preventDefault();
       const nameInput = document.getElementById("loginName").value.trim();
       const pwInput = document.getElementById("loginPw").value;
+      const rememberChecked = document.getElementById("rememberLogin")?.checked;
       if (!nameInput || !pwInput) return alert("이름과 비밀번호를 입력하세요.");
 
       const { data: prof, error: profErr } = await sb.from("team_profiles").select("email").eq("username", nameInput).single();
@@ -163,13 +267,26 @@
       const { data, error } = await sb.auth.signInWithPassword({ email: prof.email, password: pwInput });
       if (error) return alert("비밀번호가 일치하지 않습니다.");
 
+      try {
+        if (rememberChecked) {
+          localStorage.setItem(SAVED_CREDS_KEY, JSON.stringify({ username: nameInput, password: pwInput }));
+        } else {
+          localStorage.removeItem(SAVED_CREDS_KEY);
+        }
+      } catch (err) {}
+
       state.user = data.user;
       state.username = nameInput;
       await loadAllData();
+      setupRealtimeSync();
       render();
     }
 
     async function handleLogout() {
+      if (realtimeChannel) {
+        sb.removeChannel(realtimeChannel);
+        realtimeChannel = null;
+      }
       await sb.auth.signOut();
       state.user = null;
       state.username = "";
@@ -182,6 +299,14 @@
       if (newPw.length < 6) return alert("비밀번호는 6자리 이상으로 입력하세요.");
       const { error } = await sb.auth.updateUser({ password: newPw });
       if (error) return alert("변경 실패: " + error.message);
+
+      try {
+        const saved = getSavedCredentials();
+        if (saved && saved.username === state.username) {
+          localStorage.setItem(SAVED_CREDS_KEY, JSON.stringify({ username: state.username, password: newPw }));
+        }
+      } catch (err) {}
+
       alert("비밀번호가 성공적으로 변경되었습니다!");
       state.pwModalOpen = false;
       render();
@@ -190,6 +315,37 @@
     function openForm(record = null) {
       state.editingRecord = record;
       state.modalOpen = true;
+      render();
+    }
+
+    function openExportModal() {
+      state.exportDateKey = state.dateFilterKey || "receipt_date";
+      state.exportDateFrom = state.dateFrom || "";
+      state.exportDateTo = state.dateTo || "";
+      state.exportModalOpen = true;
+      render();
+    }
+
+    function setExportPreset(type) {
+      const now = new Date();
+      const pad = n => String(n).padStart(2, "0");
+      if (type === "all") {
+        state.exportDateFrom = "";
+        state.exportDateTo = "";
+      } else if (type === "thisMonth") {
+        const y = now.getFullYear();
+        const m = now.getMonth() + 1;
+        const lastDay = new Date(y, m, 0).getDate();
+        state.exportDateFrom = `${y}-${pad(m)}-01`;
+        state.exportDateTo = `${y}-${pad(m)}-${pad(lastDay)}`;
+      } else if (type === "lastMonth") {
+        const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const y = prev.getFullYear();
+        const m = prev.getMonth() + 1;
+        const lastDay = new Date(y, m, 0).getDate();
+        state.exportDateFrom = `${y}-${pad(m)}-01`;
+        state.exportDateTo = `${y}-${pad(m)}-${pad(lastDay)}`;
+      }
       render();
     }
 
@@ -246,6 +402,7 @@
       state.editingRecord = null;
       await loadAllData();
       render();
+      showToast("✅ 저장되었습니다");
     }
 
     async function deleteRecord(id) {
@@ -254,6 +411,7 @@
       state.modalOpen = false;
       await loadAllData();
       render();
+      showToast("🗑️ 삭제되었습니다");
     }
 
     async function addNewField(e) {
@@ -319,6 +477,14 @@
         if (state.sidoFilter !== "전체" && r.region_sido !== state.sidoFilter) return false;
         if (state.modelFilter !== "전체" && (r.model_name || "") !== state.modelFilter) return false;
         if (state.visitorFilter !== "전체" && (r.visitor || "") !== state.visitorFilter) return false;
+
+        if (state.dateFrom || state.dateTo) {
+          const dVal = getLocalDateStr(r, state.dateFilterKey);
+          if (!dVal) return false;
+          if (state.dateFrom && dVal < state.dateFrom) return false;
+          if (state.dateTo && dVal > state.dateTo) return false;
+        }
+
         if (state.search) {
           const q = state.search.toLowerCase();
           const target = `${r.customer_name} ${r.phone} ${r.model_name} ${r.serial_number} ${r.dealer_name} ${r.visitor} ${r.region_sigun} ${r.address_detail} ${r.symptom_detail} ${r.created_by}`.toLowerCase();
@@ -359,8 +525,22 @@
       });
     }
 
+    function getExportTargetRecords() {
+      const baseRows = getFilteredRecords();
+      if (!state.exportDateFrom && !state.exportDateTo) return baseRows;
+      return baseRows.filter(r => {
+        const dVal = getLocalDateStr(r, state.exportDateKey);
+        if (!dVal) return false;
+        if (state.exportDateFrom && dVal < state.exportDateFrom) return false;
+        if (state.exportDateTo && dVal > state.exportDateTo) return false;
+        return true;
+      });
+    }
+
     function exportExcel(format) {
-      const rows = getFilteredRecords();
+      const rows = getExportTargetRecords();
+      if (rows.length === 0) return alert("선택한 기간에 해당하는 내역이 없습니다.");
+
       const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
       const customCols = state.configs.filter(c => !c.is_system);
 
@@ -387,7 +567,9 @@
         ];
       });
 
-      const dateStr = new Date().toISOString().slice(0, 10);
+      const rangeSuffix = (state.exportDateFrom || state.exportDateTo)
+        ? `_${state.exportDateFrom || "처음"}~${state.exportDateTo || "현재"}`
+        : `_${new Date().toISOString().slice(0, 10)}`;
 
       if (format === "xls" || format === "xlsx") {
         const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
@@ -395,9 +577,9 @@
         XLSX.utils.book_append_sheet(wb, ws, "AS접수대장");
 
         if (format === "xls") {
-          XLSX.writeFile(wb, `AS접수대장_${dateStr}.xls`, { bookType: "biff8" });
+          XLSX.writeFile(wb, `AS접수대장${rangeSuffix}.xls`, { bookType: "biff8" });
         } else {
-          XLSX.writeFile(wb, `AS접수대장_${dateStr}.xlsx`, { bookType: "xlsx" });
+          XLSX.writeFile(wb, `AS접수대장${rangeSuffix}.xlsx`, { bookType: "xlsx" });
         }
       } else {
         const csvLines = [
@@ -408,13 +590,13 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `AS접수대장_${dateStr}.csv`;
+        a.download = `AS접수대장${rangeSuffix}.csv`;
         a.click();
       }
 
       state.exportModalOpen = false;
       render();
-      showToast(`📥 ${format.toUpperCase()} 파일 다운로드 완료`);
+      showToast(`📥 ${rows.length}건 (${format.toUpperCase()}) 다운로드 완료`);
     }
 
     function statusBadge(st) {
@@ -479,9 +661,134 @@
         </th>`;
     }
 
+    function buildRecordsHtml() {
+      const filtered = getFilteredRecords();
+      return `
+        <div class="text-xs text-gray-500 mb-2 px-1 flex justify-between items-center">
+          <div>총 <b>${filtered.length}</b>건 조회됨 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
+          <div class="text-[11px] text-emerald-600 font-medium">● 실시간 동기화 연결됨</div>
+        </div>
+
+        <!-- PC 화면: 표(테이블) 뷰 -->
+        <div class="hidden md:block bg-white rounded-xl shadow-sm overflow-x-auto">
+          <table class="w-full text-sm text-left whitespace-nowrap">
+            <thead class="bg-gray-50 border-b text-gray-600">
+              <tr>
+                ${renderSortTh("status", "상태")}
+                ${renderSortTh("urgency", "긴급도")}
+                ${renderSortTh("customer_name", "고객명")}
+                ${renderSortTh("receipt_date", "접수일자")}
+                ${renderSortTh("visit_date", "출장예정일")}
+                ${renderSortTh("visitor", "방문자")}
+                ${renderSortTh("region_sido", "지역")}
+                ${renderSortTh("phone", "연락처")}
+                ${renderSortTh("model_name", "모델(기대번호)")}
+                ${renderSortTh("symptom_detail", "접수시 증상")}
+                ${renderSortTh("payment_type", "구분")}
+                ${renderSortTh("repair_cost", "수리비", true)}
+                ${renderSortTh("parts_cost", "부품비", true)}
+                ${renderSortTh("vat_cost", "부가세", true)}
+                ${renderSortTh("total_cost", "합계금액", true)}
+                ${renderSortTh("created_at", "작성일")}
+                ${renderSortTh("created_by", "작성/수정자")}
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              ${filtered.map(r => {
+                const pt = r.payment_type || "현금";
+                const ug = r.urgency || "일반";
+                const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
+                const createdStr = formatDateTime(r.created_at);
+                const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
+                return `
+                <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-blue-50 cursor-pointer">
+                  <td class="p-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${statusBadge(r.status)}">${r.status}</span></td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${urgencyBadge(ug)}">${ug}</span></td>
+                  <td class="p-3 font-bold">${r.customer_name}</td>
+                  <td class="p-3">${r.receipt_date || ""}</td>
+                  <td class="p-3 text-blue-600 font-medium">${r.visit_date || "-"}</td>
+                  <td class="p-3">${r.visitor || "-"}</td>
+                  <td class="p-3">${r.region_sido || ""} ${r.region_sigun || ""}</td>
+                  <td class="p-3">${r.phone || ""}</td>
+                  <td class="p-3">${r.model_name || ""} ${r.serial_number ? `<span class="text-xs text-gray-400">(${r.serial_number})</span>` : ""}</td>
+                  <td class="p-3 max-w-xs truncate">${r.symptom_detail || ""}</td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${paymentBadge(pt)}">${pt}</span></td>
+                  <td class="p-3 text-right text-gray-600">${(r.repair_cost || 0).toLocaleString()}원</td>
+                  <td class="p-3 text-right text-gray-600">${(r.parts_cost || 0).toLocaleString()}원</td>
+                  <td class="p-3 text-right text-gray-600">${vat.toLocaleString()}원</td>
+                  <td class="p-3 text-right font-bold text-gray-900">${(r.total_cost || 0).toLocaleString()}원</td>
+                  <td class="p-3 text-xs text-gray-600">
+                    <div>${createdStr}</div>
+                    ${updatedStr ? `<div class="text-[11px] text-gray-400">수정: ${updatedStr}</div>` : ""}
+                  </td>
+                  <td class="p-3 text-xs text-gray-500">작성: ${r.created_by}${r.updated_by ? ` / 수정: ${r.updated_by}` : ""}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 모바일 화면: 한 손 조작 카드 뷰 -->
+        <div class="md:hidden space-y-3">
+          ${filtered.map(r => {
+            const pt = r.payment_type || "현금";
+            const ug = r.urgency || "일반";
+            const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
+            const createdStr = formatDateTime(r.created_at);
+            const fullAddr = `${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}`.replace(/\s+/g, " ").trim();
+            const safeAddr = fullAddr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+            return `
+            <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 active:bg-blue-50">
+              <div class="flex justify-between items-start mb-2">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${statusBadge(r.status)}">${r.status}</span>
+                  ${ug !== "일반" ? `<span class="px-2 py-0.5 rounded text-xs font-bold ${urgencyBadge(ug)}">${ug}</span>` : ""}
+                  <span class="font-bold text-base">${r.customer_name}</span>
+                </div>
+                <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
+              </div>
+              <div class="text-sm text-gray-700 space-y-1.5">
+                <div class="flex items-start justify-between gap-2">
+                  <span class="flex-1 leading-snug">📍 ${fullAddr || "주소 미입력"}</span>
+                  ${fullAddr ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-gray-100 active:bg-blue-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded-md text-xs font-semibold">📋 복사</button>` : ""}
+                </div>
+                <div>🔧 <b>${r.model_name || "모델미입력"}</b> ${r.serial_number ? `(${r.serial_number})` : ""} · ${r.symptom_category || ""}</div>
+                ${r.dealer_name ? `<div class="text-xs text-gray-500">🏢 대리점: ${r.dealer_name} ${r.dealer_phone ? `(${r.dealer_phone})` : ""}</div>` : ""}
+                <div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">${r.symptom_detail || "증상 내용 없음"}</div>
+              </div>
+              <div class="mt-2.5 bg-gray-50 px-2.5 py-1.5 rounded-lg flex justify-between items-center text-xs">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="px-1.5 py-0.5 rounded font-semibold ${paymentBadge(pt)}">${pt}</span>
+                  <span class="text-gray-600">수리 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()} / 부가세 ${vat.toLocaleString()}</span>
+                </div>
+                <span class="font-bold text-sm text-blue-700 shrink-0 ml-1">합계 ${(r.total_cost || 0).toLocaleString()}원</span>
+              </div>
+              <div class="mt-2.5 pt-2 border-t flex justify-between items-center text-xs gap-2">
+                <div class="text-gray-500 leading-relaxed">
+                  ${r.visit_date ? `<span class="text-blue-600 font-semibold">출장: ${r.visit_date}</span>${r.visitor ? ` (${r.visitor})` : ""}<br/>` : (r.visitor ? `방문자: ${r.visitor}<br/>` : "")}
+                  <span>작성일: ${createdStr}</span> · <span>작성:${r.created_by}${r.updated_by ? `/수정:${r.updated_by}` : ""}</span>
+                </div>
+                <div class="shrink-0">
+                  ${r.phone ? `<a href="tel:${r.phone}" onclick="event.stopPropagation()" class="bg-green-500 text-white px-2.5 py-1 rounded-lg font-semibold">📞 전화</a>` : ""}
+                </div>
+              </div>
+            </div>`;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    function renderRecordsArea() {
+      const container = document.getElementById("recordsArea");
+      if (container) {
+        container.innerHTML = buildRecordsHtml();
+      }
+    }
+
     function render() {
       const app = document.getElementById("app");
       if (!state.user) {
+        const saved = getSavedCredentials();
         app.innerHTML = `
           <div class="min-h-screen flex items-center justify-center p-4">
             <form onsubmit="handleLogin(event)" class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-sm space-y-5">
@@ -491,19 +798,22 @@
               </div>
               <div>
                 <label class="block text-sm font-medium mb-1">아이디 (팀원 이름)</label>
-                <input id="loginName" type="text" placeholder="예: 박종민" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+                <input id="loginName" name="username" autocomplete="username" type="text" value="${saved ? saved.username : ""}" placeholder="예: 박종민" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
               </div>
               <div>
                 <label class="block text-sm font-medium mb-1">비밀번호</label>
-                <input id="loginPw" type="password" placeholder="비밀번호 입력" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+                <input id="loginPw" name="password" autocomplete="current-password" type="password" value="${saved ? saved.password : ""}" placeholder="비밀번호 입력" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
               </div>
+              <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input id="rememberLogin" type="checkbox" ${saved ? "checked" : ""} class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+                <span>아이디 · 비밀번호 저장</span>
+              </label>
               <button type="submit" class="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg hover:bg-blue-700">로그인</button>
             </form>
           </div>`;
         return;
       }
 
-      const filtered = getFilteredRecords();
       const statusOpts = getCfg("status")?.options || ["접수","처리중","대기중","처리완료","보류"];
       const sidoOpts = getCfg("region_sido")?.options || ["서울","경기","인천","강원","충북","충남","대전","세종","전북","전남","광주","경북","경남","대구","울산","부산","제주"];
 
@@ -519,8 +829,8 @@
       ]);
       const visitorOpts = Array.from(visitorSet);
 
-      const hasActiveFilter = state.search || state.statusFilter !== "전체" || state.sidoFilter !== "전체" || state.modelFilter !== "전체" || state.visitorFilter !== "전체" || state.sortKey !== "created_at" || state.sortDir !== "desc";
       const currentSortVal = `${state.sortKey}:${state.sortDir}`;
+      const exportRows = state.exportModalOpen ? getExportTargetRecords() : [];
 
       app.innerHTML = `
         <!-- 상단 바 -->
@@ -530,23 +840,42 @@
               <span class="font-bold text-lg text-blue-600">AS 접수 대장</span>
               <span class="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-full font-medium">${state.username}님</span>
             </div>
-            <div class="flex items-center gap-2 text-sm">
-              <button onclick="state.configModalOpen=true;render()" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">⚙️ 항목관리</button>
-              <button onclick="state.exportModalOpen=true;render()" class="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-medium">📥 엑셀다운</button>
-              <button onclick="state.pwModalOpen=true;render()" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg">비번변경</button>
-              <button onclick="handleLogout()" class="px-3 py-1.5 text-gray-500 hover:text-red-600">로그아웃</button>
+            <div class="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
+              <button id="refreshBtn" onclick="manualRefresh()" class="px-2.5 sm:px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium">🔄 새로고침</button>
+              <button onclick="state.configModalOpen=true;render()" class="px-2.5 sm:px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">⚙️ 항목관리</button>
+              <button onclick="openExportModal()" class="px-2.5 sm:px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-medium">📥 엑셀다운</button>
+              <button onclick="state.pwModalOpen=true;render()" class="px-2.5 sm:px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg">비번변경</button>
+              <button onclick="handleLogout()" class="px-2 py-1.5 text-gray-500 hover:text-red-600">로그아웃</button>
             </div>
           </div>
         </header>
 
         <!-- 검색 및 필터 바 -->
         <main class="max-w-7xl mx-auto p-4 pb-24">
-          <div class="bg-white p-3 rounded-xl shadow-sm mb-4 space-y-2">
+          <div class="bg-white p-3 rounded-xl shadow-sm mb-4 space-y-2.5">
             <div class="flex gap-2 items-center">
-              <input type="text" value="${state.search}" oninput="state.search=this.value;render()" placeholder="고객명, 연락처, 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm" />
-              ${hasActiveFilter ? `<button onclick="resetFilters()" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>` : ""}
+              <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처, 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>
               <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">+ 새 AS 접수</button>
             </div>
+
+            <!-- 날짜 구간 검색 바 -->
+            <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100 text-sm">
+              <select onchange="state.dateFilterKey=this.value;render()" class="border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white font-medium text-gray-700">
+                <option value="receipt_date" ${state.dateFilterKey==="receipt_date"?"selected":""}>기간: 접수일자</option>
+                <option value="completed_date" ${state.dateFilterKey==="completed_date"?"selected":""}>기간: 처리완료일</option>
+                <option value="visit_date" ${state.dateFilterKey==="visit_date"?"selected":""}>기간: 출장예정일</option>
+                <option value="created_at" ${state.dateFilterKey==="created_at"?"selected":""}>기간: 작성일</option>
+              </select>
+              <div class="flex items-center gap-1.5 flex-1 min-w-[240px]">
+                <input type="date" value="${state.dateFrom}" onchange="state.dateFrom=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                <span class="text-gray-400 font-bold">~</span>
+                <input type="date" value="${state.dateTo}" onchange="state.dateTo=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                ${(state.dateFrom || state.dateTo) ? `<button type="button" onclick="state.dateFrom='';state.dateTo='';render()" class="px-2 py-1.5 text-xs bg-white border rounded-lg text-gray-500 hover:text-red-600">해제</button>` : ""}
+              </div>
+            </div>
+
+            <!-- 항목 필터 바 -->
             <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
               <select onchange="state.statusFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
                 <option value="전체" ${state.statusFilter==="전체"?"selected":""}>상태: 전체</option>
@@ -582,114 +911,7 @@
             </div>
           </div>
 
-          <div class="text-xs text-gray-500 mb-2 px-1">총 <b>${filtered.length}</b>건 조회됨 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
-
-          <!-- PC 화면: 표(테이블) 뷰 -->
-          <div class="hidden md:block bg-white rounded-xl shadow-sm overflow-x-auto">
-            <table class="w-full text-sm text-left whitespace-nowrap">
-              <thead class="bg-gray-50 border-b text-gray-600">
-                <tr>
-                  ${renderSortTh("status", "상태")}
-                  ${renderSortTh("urgency", "긴급도")}
-                  ${renderSortTh("customer_name", "고객명")}
-                  ${renderSortTh("receipt_date", "접수일자")}
-                  ${renderSortTh("visit_date", "출장예정일")}
-                  ${renderSortTh("visitor", "방문자")}
-                  ${renderSortTh("region_sido", "지역")}
-                  ${renderSortTh("phone", "연락처")}
-                  ${renderSortTh("model_name", "모델(기대번호)")}
-                  ${renderSortTh("symptom_detail", "접수시 증상")}
-                  ${renderSortTh("payment_type", "구분")}
-                  ${renderSortTh("repair_cost", "수리비", true)}
-                  ${renderSortTh("parts_cost", "부품비", true)}
-                  ${renderSortTh("vat_cost", "부가세", true)}
-                  ${renderSortTh("total_cost", "합계금액", true)}
-                  ${renderSortTh("created_at", "작성일")}
-                  ${renderSortTh("created_by", "작성/수정자")}
-                </tr>
-              </thead>
-              <tbody class="divide-y">
-                ${filtered.map(r => {
-                  const pt = r.payment_type || "현금";
-                  const ug = r.urgency || "일반";
-                  const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
-                  const createdStr = formatDateTime(r.created_at);
-                  const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
-                  return `
-                  <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-blue-50 cursor-pointer">
-                    <td class="p-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${statusBadge(r.status)}">${r.status}</span></td>
-                    <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${urgencyBadge(ug)}">${ug}</span></td>
-                    <td class="p-3 font-bold">${r.customer_name}</td>
-                    <td class="p-3">${r.receipt_date || ""}</td>
-                    <td class="p-3 text-blue-600 font-medium">${r.visit_date || "-"}</td>
-                    <td class="p-3">${r.visitor || "-"}</td>
-                    <td class="p-3">${r.region_sido || ""} ${r.region_sigun || ""}</td>
-                    <td class="p-3">${r.phone || ""}</td>
-                    <td class="p-3">${r.model_name || ""} ${r.serial_number ? `<span class="text-xs text-gray-400">(${r.serial_number})</span>` : ""}</td>
-                    <td class="p-3 max-w-xs truncate">${r.symptom_detail || ""}</td>
-                    <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${paymentBadge(pt)}">${pt}</span></td>
-                    <td class="p-3 text-right text-gray-600">${(r.repair_cost || 0).toLocaleString()}원</td>
-                    <td class="p-3 text-right text-gray-600">${(r.parts_cost || 0).toLocaleString()}원</td>
-                    <td class="p-3 text-right text-gray-600">${vat.toLocaleString()}원</td>
-                    <td class="p-3 text-right font-bold text-gray-900">${(r.total_cost || 0).toLocaleString()}원</td>
-                    <td class="p-3 text-xs text-gray-600">
-                      <div>${createdStr}</div>
-                      ${updatedStr ? `<div class="text-[11px] text-gray-400">수정: ${updatedStr}</div>` : ""}
-                    </td>
-                    <td class="p-3 text-xs text-gray-500">작성: ${r.created_by}${r.updated_by ? ` / 수정: ${r.updated_by}` : ""}</td>
-                  </tr>`;
-                }).join("")}
-              </tbody>
-            </table>
-          </div>
-
-          <!-- 모바일 화면: 한 손 조작 카드 뷰 -->
-          <div class="md:hidden space-y-3">
-            ${filtered.map(r => {
-              const pt = r.payment_type || "현금";
-              const ug = r.urgency || "일반";
-              const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
-              const createdStr = formatDateTime(r.created_at);
-              const fullAddr = `${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}`.replace(/\s+/g, " ").trim();
-              const safeAddr = fullAddr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-              return `
-              <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 active:bg-blue-50">
-                <div class="flex justify-between items-start mb-2">
-                  <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${statusBadge(r.status)}">${r.status}</span>
-                    ${ug !== "일반" ? `<span class="px-2 py-0.5 rounded text-xs font-bold ${urgencyBadge(ug)}">${ug}</span>` : ""}
-                    <span class="font-bold text-base">${r.customer_name}</span>
-                  </div>
-                  <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
-                </div>
-                <div class="text-sm text-gray-700 space-y-1.5">
-                  <div class="flex items-start justify-between gap-2">
-                    <span class="flex-1 leading-snug">📍 ${fullAddr || "주소 미입력"}</span>
-                    ${fullAddr ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-gray-100 active:bg-blue-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded-md text-xs font-semibold">📋 복사</button>` : ""}
-                  </div>
-                  <div>🔧 <b>${r.model_name || "모델미입력"}</b> ${r.serial_number ? `(${r.serial_number})` : ""} · ${r.symptom_category || ""}</div>
-                  ${r.dealer_name ? `<div class="text-xs text-gray-500">🏢 대리점: ${r.dealer_name} ${r.dealer_phone ? `(${r.dealer_phone})` : ""}</div>` : ""}
-                  <div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">${r.symptom_detail || "증상 내용 없음"}</div>
-                </div>
-                <div class="mt-2.5 bg-gray-50 px-2.5 py-1.5 rounded-lg flex justify-between items-center text-xs">
-                  <div class="flex items-center gap-1.5 flex-wrap">
-                    <span class="px-1.5 py-0.5 rounded font-semibold ${paymentBadge(pt)}">${pt}</span>
-                    <span class="text-gray-600">수리 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()} / 부가세 ${vat.toLocaleString()}</span>
-                  </div>
-                  <span class="font-bold text-sm text-blue-700 shrink-0 ml-1">합계 ${(r.total_cost || 0).toLocaleString()}원</span>
-                </div>
-                <div class="mt-2.5 pt-2 border-t flex justify-between items-center text-xs gap-2">
-                  <div class="text-gray-500 leading-relaxed">
-                    ${r.visit_date ? `<span class="text-blue-600 font-semibold">출장: ${r.visit_date}</span>${r.visitor ? ` (${r.visitor})` : ""}<br/>` : (r.visitor ? `방문자: ${r.visitor}<br/>` : "")}
-                    <span>작성일: ${createdStr}</span> · <span>작성:${r.created_by}${r.updated_by ? `/수정:${r.updated_by}` : ""}</span>
-                  </div>
-                  <div class="shrink-0">
-                    ${r.phone ? `<a href="tel:${r.phone}" onclick="event.stopPropagation()" class="bg-green-500 text-white px-2.5 py-1 rounded-lg font-semibold">📞 전화</a>` : ""}
-                  </div>
-                </div>
-              </div>`;
-            }).join("")}
-          </div>
+          <div id="recordsArea">${buildRecordsHtml()}</div>
         </main>
 
         <!-- 모바일 하단 고정 + 접수 버튼 -->
@@ -701,25 +923,51 @@
         <!-- 항목 및 옵션 관리 모달 창 -->
         ${state.configModalOpen ? renderConfigModal() : ""}
 
-        <!-- 엑셀 형식 선택 모달 창 -->
+        <!-- 엑셀 기간 및 형식 선택 모달 창 -->
         ${state.exportModalOpen ? `
           <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div class="bg-white rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <div class="bg-white rounded-2xl p-5 w-full max-w-md space-y-4">
               <div class="flex justify-between items-center border-b pb-2">
-                <h2 class="font-bold text-lg">엑셀 파일 형식 선택</h2>
+                <h2 class="font-bold text-lg">엑셀 다운로드 설정</h2>
                 <button onclick="state.exportModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
               </div>
-              <p class="text-xs text-gray-500">현재 화면에 조회된 <b>${filtered.length}건</b>을 내려받습니다. 사용 중인 엑셀 버전을 선택하세요.</p>
-              <div class="space-y-2.5">
-                <button onclick="exportExcel('xls')" class="w-full text-left p-3.5 rounded-xl border-2 border-emerald-500 bg-emerald-50/60 hover:bg-emerald-100 transition">
+
+              <!-- 다운로드 기간 선택 영역 -->
+              <div class="bg-gray-50 p-3.5 rounded-xl border space-y-2.5 text-sm">
+                <div class="flex justify-between items-center">
+                  <span class="font-bold text-gray-800">1. 다운로드 기간 선택</span>
+                  <div class="flex gap-1 text-xs">
+                    <button type="button" onclick="setExportPreset('thisMonth')" class="px-2 py-1 bg-white border rounded hover:bg-blue-50">이번 달</button>
+                    <button type="button" onclick="setExportPreset('lastMonth')" class="px-2 py-1 bg-white border rounded hover:bg-blue-50">지난 달</button>
+                    <button type="button" onclick="setExportPreset('all')" class="px-2 py-1 bg-white border rounded hover:bg-gray-100">전체</button>
+                  </div>
+                </div>
+                <select onchange="state.exportDateKey=this.value;render()" class="w-full border rounded-lg px-2.5 py-2 bg-white text-sm">
+                  <option value="receipt_date" ${state.exportDateKey==="receipt_date"?"selected":""}>기준 날짜: 접수일자</option>
+                  <option value="completed_date" ${state.exportDateKey==="completed_date"?"selected":""}>기준 날짜: 처리완료일</option>
+                  <option value="visit_date" ${state.exportDateKey==="visit_date"?"selected":""}>기준 날짜: 출장예정일</option>
+                  <option value="created_at" ${state.exportDateKey==="created_at"?"selected":""}>기준 날짜: 작성일</option>
+                </select>
+                <div class="flex items-center gap-2">
+                  <input type="date" value="${state.exportDateFrom}" onchange="state.exportDateFrom=this.value;render()" class="flex-1 border rounded-lg px-2.5 py-1.5 bg-white text-sm" />
+                  <span class="text-gray-400 font-bold">~</span>
+                  <input type="date" value="${state.exportDateTo}" onchange="state.exportDateTo=this.value;render()" class="flex-1 border rounded-lg px-2.5 py-1.5 bg-white text-sm" />
+                </div>
+                <p class="text-xs text-blue-700 font-medium">※ 선택 조건에 해당하는 <b>${exportRows.length}건</b>이 다운로드됩니다.</p>
+              </div>
+
+              <!-- 파일 형식 선택 영역 -->
+              <div class="space-y-2">
+                <div class="font-bold text-sm text-gray-800">2. 엑셀 파일 형식 선택</div>
+                <button onclick="exportExcel('xls')" class="w-full text-left p-3 rounded-xl border-2 border-emerald-500 bg-emerald-50/60 hover:bg-emerald-100 transition">
                   <div class="font-bold text-emerald-900 text-sm">📊 구버전 엑셀용 (.xls)</div>
                   <div class="text-xs text-emerald-700 mt-0.5">엑셀 97~2003 호환 · 구형 PC/엑셀에서 한글 깨짐 없이 열림</div>
                 </button>
-                <button onclick="exportExcel('xlsx')" class="w-full text-left p-3.5 rounded-xl border border-gray-200 hover:bg-blue-50 transition">
+                <button onclick="exportExcel('xlsx')" class="w-full text-left p-3 rounded-xl border border-gray-200 hover:bg-blue-50 transition">
                   <div class="font-bold text-gray-800 text-sm">📗 최신 엑셀용 (.xlsx)</div>
                   <div class="text-xs text-gray-500 mt-0.5">엑셀 2007 이상 표준 형식</div>
                 </button>
-                <button onclick="exportExcel('csv')" class="w-full text-left p-3.5 rounded-xl border border-gray-200 hover:bg-gray-50 transition">
+                <button onclick="exportExcel('csv')" class="w-full text-left p-3 rounded-xl border border-gray-200 hover:bg-gray-50 transition">
                   <div class="font-bold text-gray-700 text-sm">📄 CSV 파일 (.csv)</div>
                   <div class="text-xs text-gray-500 mt-0.5">일반 텍스트 데이터 형식</div>
                 </button>
