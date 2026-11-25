@@ -610,7 +610,7 @@
       const headers = [
         ...sysCols.map(c => c.field_label),
         ...customCols.map(c => c.field_label),
-        "수리비구분", "수리비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
+        "수리비구분", "출장비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
       ];
 
       const dataRows = rows.map(r => {
@@ -708,9 +708,9 @@
         } else if (payType === "무상") {
           subEl.innerText = `(내부 발생비용 ${(r+p).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
         } else if (payType === "현금") {
-          subEl.innerText = `(수리비 + 부품비 / 부가세 0원)`;
+          subEl.innerText = `(출장비 + 부품비 / 부가세 0원)`;
         } else {
-          subEl.innerText = `(수리비 + 부품비 / 수리비 구분 미선택)`;
+          subEl.innerText = `(출장비 + 부품비 / 수리비 구분 미선택)`;
         }
       }
     }
@@ -794,7 +794,7 @@
                 ${renderSortTh("model_name", "모델(기대번호)")}
                 ${renderSortTh("symptom_detail", "접수시 증상")}
                 ${renderSortTh("payment_type", "구분")}
-                ${renderSortTh("repair_cost", "수리비", true)}
+                ${renderSortTh("repair_cost", "출장비", true)}
                 ${renderSortTh("parts_cost", "부품비", true)}
                 ${renderSortTh("vat_cost", "부가세", true)}
                 ${renderSortTh("total_cost", "합계금액", true)}
@@ -1154,10 +1154,10 @@
       const vat = getVatAmount(payType, repair, parts);
       const total = calculateTotal(payType, repair, parts);
 
-      let subText = "(수리비 + 부품비 / 수리비 구분 미선택)";
+      let subText = "(출장비 + 부품비 / 수리비 구분 미선택)";
       if (payType === "세금계산서") subText = `(공급가 ${(repair+parts).toLocaleString()}원 + 부가세 ${vat.toLocaleString()}원)`;
       if (payType === "무상") subText = `(내부 발생비용 ${(repair+parts).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
-      if (payType === "현금") subText = "(수리비 + 부품비 / 부가세 0원)";
+      if (payType === "현금") subText = "(출장비 + 부품비 / 부가세 0원)";
 
       return `
         <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
@@ -1204,7 +1204,7 @@
                   </select>
                 </div>
                 <div>
-                  <label class="block font-medium text-xs mb-1">수리비 (원)</label>
+                  <label class="block font-medium text-xs mb-1">출장비 (원)</label>
                   <input id="inpRepairCost" type="number" name="repair_cost" value="${repair}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
                 </div>
                 <div>
