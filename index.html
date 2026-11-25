@@ -8,6 +8,7 @@
   <title>AS 접수 관리 대장</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; background: #f3f4f6; }
   </style>
@@ -38,6 +39,7 @@
       modalOpen: false,
       configModalOpen: false,
       pwModalOpen: false,
+      exportModalOpen: false,
       editingRecord: null
     };
 
@@ -282,9 +284,9 @@
       });
     }
 
-    function exportCSV() {
+    function exportExcel(format) {
       const rows = getFilteredRecords();
-      const sysCols = state.configs.filter(c => c.is_system);
+      const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
       const customCols = state.configs.filter(c => !c.is_system);
 
       const headers = [
@@ -292,24 +294,46 @@
         ...customCols.map(c => c.field_label),
         "수리비구분", "수리비", "부품비", "최종합계", "최초작성자", "최종수정자"
       ];
-      const csvLines = [headers.join(",")];
 
-      rows.forEach(r => {
-        const line = [
-          ...sysCols.map(c => r[c.field_key] ?? ""),
-          ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
-          r.payment_type || "현금", r.repair_cost, r.parts_cost, r.total_cost,
-          r.created_by, r.updated_by || ""
-        ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`);
-        csvLines.push(line.join(","));
-      });
+      const dataRows = rows.map(r => [
+        ...sysCols.map(c => r[c.field_key] ?? ""),
+        ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
+        r.payment_type || "현금",
+        r.repair_cost || 0,
+        r.parts_cost || 0,
+        r.total_cost || 0,
+        r.created_by || "",
+        r.updated_by || ""
+      ]);
 
-      const blob = new Blob(["\uFEFF" + csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `AS접수대장_${new Date().toISOString().slice(0,10)}.csv`;
-      a.click();
+      const dateStr = new Date().toISOString().slice(0, 10);
+
+      if (format === "xls" || format === "xlsx") {
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "AS접수대장");
+
+        if (format === "xls") {
+          XLSX.writeFile(wb, `AS접수대장_${dateStr}.xls`, { bookType: "biff8" });
+        } else {
+          XLSX.writeFile(wb, `AS접수대장_${dateStr}.xlsx`, { bookType: "xlsx" });
+        }
+      } else {
+        const csvLines = [
+          headers.join(","),
+          ...dataRows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))
+        ];
+        const blob = new Blob(["\uFEFF" + csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `AS접수대장_${dateStr}.csv`;
+        a.click();
+      }
+
+      state.exportModalOpen = false;
+      render();
+      showToast(`📥 ${format.toUpperCase()} 파일 다운로드 완료`);
     }
 
     function statusBadge(st) {
@@ -418,7 +442,7 @@
             </div>
             <div class="flex items-center gap-2 text-sm">
               <button onclick="state.configModalOpen=true;render()" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">⚙️ 항목관리</button>
-              <button onclick="exportCSV()" class="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-medium">📥 엑셀다운</button>
+              <button onclick="state.exportModalOpen=true;render()" class="px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-medium">📥 엑셀다운</button>
               <button onclick="state.pwModalOpen=true;render()" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg">비번변경</button>
               <button onclick="handleLogout()" class="px-3 py-1.5 text-gray-500 hover:text-red-600">로그아웃</button>
             </div>
@@ -560,6 +584,33 @@
 
         <!-- 항목 및 옵션 관리 모달 창 -->
         ${state.configModalOpen ? renderConfigModal() : ""}
+
+        <!-- 엑셀 형식 선택 모달 창 -->
+        ${state.exportModalOpen ? `
+          <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-2xl p-6 w-full max-w-sm space-y-4">
+              <div class="flex justify-between items-center border-b pb-2">
+                <h2 class="font-bold text-lg">엑셀 파일 형식 선택</h2>
+                <button onclick="state.exportModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
+              </div>
+              <p class="text-xs text-gray-500">현재 화면에 조회된 <b>${filtered.length}건</b>을 내려받습니다. 사용 중인 엑셀 버전을 선택하세요.</p>
+              <div class="space-y-2.5">
+                <button onclick="exportExcel('xls')" class="w-full text-left p-3.5 rounded-xl border-2 border-emerald-500 bg-emerald-50/60 hover:bg-emerald-100 transition">
+                  <div class="font-bold text-emerald-900 text-sm">📊 구버전 엑셀용 (.xls)</div>
+                  <div class="text-xs text-emerald-700 mt-0.5">엑셀 97~2003 호환 · 구형 PC/엑셀에서 한글 깨짐 없이 열림</div>
+                </button>
+                <button onclick="exportExcel('xlsx')" class="w-full text-left p-3.5 rounded-xl border border-gray-200 hover:bg-blue-50 transition">
+                  <div class="font-bold text-gray-800 text-sm">📗 최신 엑셀용 (.xlsx)</div>
+                  <div class="text-xs text-gray-500 mt-0.5">엑셀 2007 이상 표준 형식</div>
+                </button>
+                <button onclick="exportExcel('csv')" class="w-full text-left p-3 rounded-xl border border-gray-200 hover:bg-gray-50 transition">
+                  <div class="font-bold text-gray-700 text-sm">📄 CSV 파일 (.csv)</div>
+                  <div class="text-xs text-gray-500 mt-0.5">일반 텍스트 데이터 형식</div>
+                </button>
+              </div>
+              <button onclick="state.exportModalOpen=false;render()" class="w-full py-2 bg-gray-100 rounded-lg text-sm text-gray-600">닫기</button>
+            </div>
+          </div>` : ""}
 
         <!-- 비밀번호 변경 모달 창 -->
         ${state.pwModalOpen ? `
