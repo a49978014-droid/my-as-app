@@ -17,7 +17,7 @@
 
   <script>
     // ==========================================
-    // [중요] 아래 두 번째 줄에 기존에 쓰던 eyJ... 암호를 붙여넣으세요!
+    // [중요] 아래 두 번째 줄에 아까 복사해 둔 eyJ... 암호를 붙여넣으세요!
     // ==========================================
     const SUPABASE_URL = "https://egntrwdxehqyyntjuczr.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnbnRyd2R4ZWhxeXludGp1Y3pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU1NzI2MjMsImV4cCI6MjExMTE0ODYyM30.DCeVvGoJ7m41FhNPH39dLzogrTsdq6QiAoRgsT7CgH0";
@@ -202,16 +202,15 @@
     function exportCSV() {
       const rows = getFilteredRecords();
       const customCols = state.configs.filter(c => !c.is_system);
-      const headers = ["접수일","진행상태","고객명","연락처","출장예정일","시/도","시/군","상세주소","모델","증상분류","접수시증상","처리내용", ...customCols.map(c => c.field_label), "결제구분","수리비","부품비","최종합계","최초작성자","최종수정자"];
+      const headers = ["접수일","진행상태","고객명","연락처","출장예정일","시/도","시/군","상세주소","모델","증상분류","접수시증상","처리내용","결제구분","수리비","부품비","최종합계", ...customCols.map(c => c.field_label), "최초작성자","최종수정자"];
       const csvLines = [headers.join(",")];
 
       rows.forEach(r => {
         const line = [
           r.receipt_date, r.status, r.customer_name, r.phone, r.visit_date || "",
           r.region_sido, r.region_sigun, r.address_detail, r.model_name, r.symptom_category,
-          r.symptom_detail, r.repair_note,
+          r.symptom_detail, r.repair_note, r.payment_type || "현금", r.repair_cost, r.parts_cost, r.total_cost,
           ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
-          r.payment_type || "현금", r.repair_cost, r.parts_cost, r.total_cost,
           r.created_by, r.updated_by || ""
         ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`);
         csvLines.push(line.join(","));
@@ -362,7 +361,7 @@
                     <td class="p-3 text-blue-600 font-medium">${r.visit_date || "-"}</td>
                     <td class="p-3 font-bold">${r.customer_name}</td>
                     <td class="p-3">${r.phone || ""}</td>
-                    <td class="p-3">${r.region_sido \vert{}\vert{} ""} ${r.region_sigun || ""}</td>
+                    <td class="p-3">${r.region_sido || ""} ${r.region_sigun || ""}</td>
                     <td class="p-3">${r.model_name || ""}</td>
                     <td class="p-3 max-w-xs truncate">${r.symptom_detail || ""}</td>
                     <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${paymentBadge(pt)}">${pt}</span></td>
@@ -390,15 +389,15 @@
                   <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
                 </div>
                 <div class="text-sm text-gray-700 space-y-1">
-                  <div>📍 ${r.region_sido || ""} ${r.region_sigun \vert{}\vert{} ""} ${r.address_detail || ""}</div>
-                  <div>🔧 <b>${r.model_name \vert{}\vert{} "모델미입력"}</b> · ${r.symptom_category || ""}</div>
+                  <div>📍 ${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}</div>
+                  <div>🔧 <b>${r.model_name || "모델미입력"}</b> · ${r.symptom_category || ""}</div>
                   <div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">${r.symptom_detail || "증상 내용 없음"}</div>
                 </div>
                 <!-- 수리비 / 부품비 / 구분 분리 표시 -->
                 <div class="mt-2.5 bg-gray-50 px-2.5 py-1.5 rounded-lg flex justify-between items-center text-xs">
                   <div class="flex items-center gap-1.5">
                     <span class="px-1.5 py-0.5 rounded font-semibold ${paymentBadge(pt)}">${pt}</span>
-                    <span class="text-gray-600">수리 ${(r.repair_cost \vert{}\vert{} 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()}</span>
+                    <span class="text-gray-600">수리 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()}</span>
                   </div>
                   <span class="font-bold text-sm text-blue-700">합계 ${(r.total_cost || 0).toLocaleString()}원</span>
                 </div>
@@ -441,4 +440,203 @@
     }
 
     function renderFormModal(statusCfg, symptomCfg, customCols) {
-      const r = state.editingRecord
+      const r = state.editingRecord || {};
+      const today = new Date().toISOString().slice(0, 10);
+      const payType = r.payment_type || "현금";
+      const repair = r.repair_cost || 0;
+      const parts = r.parts_cost || 0;
+      const total = calculateTotal(payType, repair, parts);
+
+      let subText = "(수리비 + 부품비)";
+      if (payType === "세금계산서") subText = `(공급가 ${(repair+parts).toLocaleString()}원 + 부가세 ${(total-(repair+parts)).toLocaleString()}원)`;
+      if (payType === "무상") subText = `(내부 발생비용 ${(repair+parts).toLocaleString()}원 / 청구 0원)`;
+
+      return `
+        <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
+          <form onsubmit="saveRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
+            <div class="flex justify-between items-center border-b pb-3">
+              <h2 class="font-bold text-lg">${r.id ? "AS 내역 상세 / 수정" : "새 AS 접수 등록"}</h2>
+              <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
+            </div>
+
+            ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">최초 작성: <b>${r.created_by}</b> (${r.created_at?.slice(0,16).replace("T"," ")}) / 최종 수정: <b>${r.updated_by || "-"}</b></div>` : ""}
+
+            <div class="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <label class="block font-medium mb-1">고객명 *</label>
+                <input name="customer_name" value="${r.customer_name || ""}" required class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">진행 상태</label>
+                <select name="status" class="w-full border rounded-lg px-3 py-2 bg-white">
+                  ${statusCfg.options.map(o => `<option value="${o}" ${(r.status || "접수")===o?"selected":""}>${o}</option>`).join("")}
+                </select>
+              </div>
+              <div>
+                <label class="block font-medium mb-1">접수일</label>
+                <input type="date" name="receipt_date" value="${r.receipt_date || today}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">출장 예정일</label>
+                <input type="date" name="visit_date" value="${r.visit_date || ""}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">연락처</label>
+                <input name="phone" value="${r.phone || ""}" placeholder="010-0000-0000" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">모델명</label>
+                <input name="model_name" value="${r.model_name || ""}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block font-medium mb-1">지역 (시/도)</label>
+                <select name="region_sido" class="w-full border rounded-lg px-3 py-2 bg-white">
+                  <option value="">선택</option>
+                  ${SIDO_LIST.map(s => `<option value="${s}" ${r.region_sido===s?"selected":""}>${s}</option>`).join("")}
+                </select>
+              </div>
+              <div>
+                <label class="block font-medium mb-1">지역 (시/군/구)</label>
+                <input name="region_sigun" value="${r.region_sigun || ""}" placeholder="예: 부천시 원미구" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+            </div>
+
+            <div class="text-sm">
+              <label class="block font-medium mb-1">상세주소</label>
+              <input name="address_detail" value="${r.address_detail || ""}" class="w-full border rounded-lg px-3 py-2" />
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div>
+                <label class="block font-medium mb-1">증상 분류</label>
+                <select name="symptom_category" class="w-full border rounded-lg px-3 py-2 bg-white">
+                  ${symptomCfg.options.map(o => `<option value="${o}" ${r.symptom_category===o?"selected":""}>${o}</option>`).join("")}
+                </select>
+              </div>
+              <div>
+                <label class="block font-medium mb-1">접수시 증상</label>
+                <input name="symptom_detail" value="${r.symptom_detail || ""}" class="w-full border rounded-lg px-3 py-2" />
+              </div>
+            </div>
+
+            <div class="text-sm">
+              <label class="block font-medium mb-1">처리 내용 (현장 조치 사항)</label>
+              <textarea name="repair_note" rows="2" class="w-full border rounded-lg px-3 py-2">${r.repair_note || ""}</textarea>
+            </div>
+
+            <!-- 결제 구분 / 수리비 / 부품비 자동 계산 박스 -->
+            <div class="bg-blue-50 p-3.5 rounded-xl space-y-3 text-sm">
+              <div class="grid grid-cols-3 gap-2">
+                <div>
+                  <label class="block font-bold text-xs text-blue-900 mb-1">수리비 구분</label>
+                  <select id="inpPaymentType" name="payment_type" onchange="calcModalTotal()" class="w-full border border-blue-200 rounded-lg px-2 py-2 bg-white font-semibold">
+                    <option value="현금" ${payType==="현금"?"selected":""}>현금</option>
+                    <option value="세금계산서" ${payType==="세금계산서"?"selected":""}>세금계산서</option>
+                    <option value="무상" ${payType==="무상"?"selected":""}>무상</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block font-medium text-xs mb-1">수리비 (원)</label>
+                  <input id="inpRepairCost" type="number" name="repair_cost" value="${repair}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
+                </div>
+                <div>
+                  <label class="block font-medium text-xs mb-1">부품비 (원)</label>
+                  <input id="inpPartsCost" type="number" name="parts_cost" value="${parts}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
+                </div>
+              </div>
+              <div class="flex justify-between items-center border-t border-blue-200 pt-2">
+                <span id="modalSubDisplay" class="text-xs text-blue-800">${subText}</span>
+                <div class="text-right">
+                  <span class="text-xs text-gray-600 mr-1">최종 합계</span>
+                  <span id="modalTotalDisplay" class="font-bold text-lg text-blue-700">${total.toLocaleString()}원</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 사용자가 추가한 동적 항목들 -->
+            ${customCols.length > 0 ? `
+              <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
+                ${customCols.map(c => {
+                  const val = (r.custom_fields && r.custom_fields[c.field_key]) || "";
+                  if (c.field_type === "select") {
+                    return `<div>
+                      <label class="block font-medium mb-1">${c.field_label}</label>
+                      <select name="custom_${c.field_key}" class="w-full border rounded-lg px-3 py-2 bg-white">
+                        <option value="">선택</option>
+                        ${c.options.map(o => `<option value="${o}" ${val===o?"selected":""}>${o}</option>`).join("")}
+                      </select>
+                    </div>`;
+                  }
+                  return `<div>
+                    <label class="block font-medium mb-1">${c.field_label}</label>
+                    <input name="custom_${c.field_key}" value="${val}" class="w-full border rounded-lg px-3 py-2" />
+                  </div>`;
+                }).join("")}
+              </div>` : ""}
+
+            <div class="flex justify-between pt-3 border-t">
+              ${r.id ? `<button type="button" onclick="deleteRecord('${r.id}')" class="px-4 py-2.5 text-red-600 bg-red-50 rounded-lg text-sm font-medium">삭제</button>` : `<div></div>`}
+              <div class="flex gap-2">
+                <button type="button" onclick="state.modalOpen=false;render()" class="px-4 py-2.5 bg-gray-100 rounded-lg text-sm">취소</button>
+                <button type="submit" class="px-6 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-bold">저장하기</button>
+              </div>
+            </div>
+          </form>
+        </div>`;
+    }
+
+    function renderConfigModal() {
+      const sysCols = state.configs.filter(c => c.is_system);
+      const customCols = state.configs.filter(c => !c.is_system);
+      return `
+        <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div class="bg-white rounded-2xl p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-5 text-sm">
+            <div class="flex justify-between items-center border-b pb-2">
+              <h2 class="font-bold text-lg">항목 및 선택 목록 관리</h2>
+              <button onclick="state.configModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
+            </div>
+
+            <div class="space-y-3">
+              <h3 class="font-semibold text-gray-700">1. 기본 선택 항목 수정 (쉼표로 구분)</h3>
+              ${sysCols.map(c => `
+                <div class="bg-gray-50 p-3 rounded-lg space-y-1.5">
+                  <div class="font-medium">${c.field_label}</div>
+                  <div class="flex gap-2">
+                    <input id="opt_${c.id}" value="${c.options.join(", ")}" class="flex-1 border rounded px-2.5 py-1.5 bg-white" />
+                    <button onclick="updateSystemOptions('${c.id}', document.getElementById('opt_${c.id}').value)" class="px-3 py-1.5 bg-blue-600 text-white rounded font-medium">저장</button>
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+
+            <form onsubmit="addNewField(event)" class="space-y-2 border-t pt-3">
+              <h3 class="font-semibold text-gray-700">2. 새 입력 항목 추가하기</h3>
+              <div class="grid grid-cols-2 gap-2">
+                <input id="newFieldLabel" placeholder="항목명 (예: 모델시리얼)" class="border rounded px-2.5 py-2" />
+                <select id="newFieldType" onchange="document.getElementById('newFieldOpts').style.display=this.value==='select'?'block':'none'" class="border rounded px-2.5 py-2 bg-white">
+                  <option value="select">선택형 (드롭다운)</option>
+                  <option value="text">직접 텍스트 입력</option>
+                </select>
+              </div>
+              <input id="newFieldOpts" placeholder="선택 옵션 입력 (쉼표로 구분: 옵션1, 옵션2)" class="w-full border rounded px-2.5 py-2" />
+              <button type="submit" class="w-full py-2 bg-emerald-600 text-white rounded-lg font-semibold">+ 항목 추가</button>
+            </form>
+
+            ${customCols.length > 0 ? `
+              <div class="space-y-2 border-t pt-3">
+                <h3 class="font-semibold text-gray-700">추가된 항목 목록</h3>
+                ${customCols.map(c => `
+                  <div class="flex justify-between items-center bg-gray-50 p-2.5 rounded">
+                    <div><b>${c.field_label}</b> <span class="text-xs text-gray-500">(${c.field_type === "select" ? c.options.join(", ") : "직접입력"})</span></div>
+                    <button onclick="deleteCustomField('${c.id}')" class="text-red-500 text-xs">삭제</button>
+                  </div>
+                `).join("")}
+              </div>` : ""}
+          </div>
+        </div>`;
+    }
+
+    init();
+  </script>
+</body>
+</html>
