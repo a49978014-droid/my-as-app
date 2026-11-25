@@ -36,7 +36,7 @@
       sidoFilter: "전체",
       modelFilter: "전체",
       visitorFilter: "전체",
-      sortKey: "receipt_date",
+      sortKey: "created_at",
       sortDir: "desc",
       modalOpen: false,
       configModalOpen: false,
@@ -54,9 +54,17 @@
     ];
 
     const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note"];
-    const DATE_KEYS = ["receipt_date", "visit_date", "completed_date"];
+    const DATE_KEYS = ["receipt_date", "visit_date", "completed_date", "created_at"];
     const NUMBER_KEYS = ["repair_cost", "parts_cost", "vat_cost", "total_cost"];
     const URGENCY_RANK = { "최긴급": 3, "긴급": 2, "일반": 1 };
+
+    function formatDateTime(isoStr) {
+      if (!isoStr) return "";
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return String(isoStr).slice(0, 16).replace("T", " ");
+      const pad = n => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
 
     function showToast(msg) {
       const t = document.getElementById("toast");
@@ -101,7 +109,7 @@
       state.sidoFilter = "전체";
       state.modelFilter = "전체";
       state.visitorFilter = "전체";
-      state.sortKey = "receipt_date";
+      state.sortKey = "created_at";
       state.sortDir = "desc";
       render();
     }
@@ -136,7 +144,7 @@
 
     async function loadAllData() {
       const [recRes, cfgRes] = await Promise.all([
-        sb.from("as_records").select("*").order("receipt_date", { ascending: false }).order("created_at", { ascending: false }),
+        sb.from("as_records").select("*").order("created_at", { ascending: false }),
         sb.from("field_configs").select("*").order("sort_order", { ascending: true })
       ]);
       state.records = recRes.data || [];
@@ -359,7 +367,7 @@
       const headers = [
         ...sysCols.map(c => c.field_label),
         ...customCols.map(c => c.field_label),
-        "수리비구분", "수리비", "부품비", "부가세", "최종합계", "최초작성자", "최종수정자"
+        "수리비구분", "수리비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
       ];
 
       const dataRows = rows.map(r => {
@@ -373,6 +381,7 @@
           r.parts_cost || 0,
           vat,
           r.total_cost || 0,
+          formatDateTime(r.created_at),
           r.created_by || "",
           r.updated_by || ""
         ];
@@ -510,7 +519,7 @@
       ]);
       const visitorOpts = Array.from(visitorSet);
 
-      const hasActiveFilter = state.search || state.statusFilter !== "전체" || state.sidoFilter !== "전체" || state.modelFilter !== "전체" || state.visitorFilter !== "전체" || state.sortKey !== "receipt_date" || state.sortDir !== "desc";
+      const hasActiveFilter = state.search || state.statusFilter !== "전체" || state.sidoFilter !== "전체" || state.modelFilter !== "전체" || state.visitorFilter !== "전체" || state.sortKey !== "created_at" || state.sortDir !== "desc";
       const currentSortVal = `${state.sortKey}:${state.sortDir}`;
 
       app.innerHTML = `
@@ -556,6 +565,8 @@
                 ${visitorOpts.map(v => `<option value="${v}" ${state.visitorFilter===v?"selected":""}>${v}</option>`).join("")}
               </select>
               <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-blue-200 rounded-lg px-2.5 py-2 text-sm bg-blue-50/40 font-medium text-blue-900">
+                <option value="created_at:desc" ${currentSortVal==="created_at:desc"?"selected":""}>정렬: 작성일 최신순 ▼</option>
+                <option value="created_at:asc" ${currentSortVal==="created_at:asc"?"selected":""}>정렬: 작성일 오래된순 ▲</option>
                 <option value="receipt_date:desc" ${currentSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일자 최신순 ▼</option>
                 <option value="receipt_date:asc" ${currentSortVal==="receipt_date:asc"?"selected":""}>정렬: 접수일자 오래된순 ▲</option>
                 <option value="visit_date:asc" ${currentSortVal==="visit_date:asc"?"selected":""}>정렬: 출장예정일 빠른순 ▲</option>
@@ -593,6 +604,7 @@
                   ${renderSortTh("parts_cost", "부품비", true)}
                   ${renderSortTh("vat_cost", "부가세", true)}
                   ${renderSortTh("total_cost", "합계금액", true)}
+                  ${renderSortTh("created_at", "작성일")}
                   ${renderSortTh("created_by", "작성/수정자")}
                 </tr>
               </thead>
@@ -601,6 +613,8 @@
                   const pt = r.payment_type || "현금";
                   const ug = r.urgency || "일반";
                   const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
+                  const createdStr = formatDateTime(r.created_at);
+                  const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
                   return `
                   <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-blue-50 cursor-pointer">
                     <td class="p-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${statusBadge(r.status)}">${r.status}</span></td>
@@ -618,6 +632,10 @@
                     <td class="p-3 text-right text-gray-600">${(r.parts_cost || 0).toLocaleString()}원</td>
                     <td class="p-3 text-right text-gray-600">${vat.toLocaleString()}원</td>
                     <td class="p-3 text-right font-bold text-gray-900">${(r.total_cost || 0).toLocaleString()}원</td>
+                    <td class="p-3 text-xs text-gray-600">
+                      <div>${createdStr}</div>
+                      ${updatedStr ? `<div class="text-[11px] text-gray-400">수정: ${updatedStr}</div>` : ""}
+                    </td>
                     <td class="p-3 text-xs text-gray-500">작성: ${r.created_by}${r.updated_by ? ` / 수정: ${r.updated_by}` : ""}</td>
                   </tr>`;
                 }).join("")}
@@ -631,6 +649,7 @@
               const pt = r.payment_type || "현금";
               const ug = r.urgency || "일반";
               const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
+              const createdStr = formatDateTime(r.created_at);
               const fullAddr = `${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}`.replace(/\s+/g, " ").trim();
               const safeAddr = fullAddr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
               return `
@@ -659,13 +678,12 @@
                   </div>
                   <span class="font-bold text-sm text-blue-700 shrink-0 ml-1">합계 ${(r.total_cost || 0).toLocaleString()}원</span>
                 </div>
-                <div class="mt-2.5 pt-2 border-t flex justify-between items-center text-xs">
-                  <div class="text-gray-500">
-                    ${r.visit_date ? `<span class="text-blue-600 font-semibold">출장: ${r.visit_date}</span>` : ""}
-                    ${r.visitor ? ` (${r.visitor})` : ""}
-                    · 작성:${r.created_by}${r.updated_by ? `/수정:${r.updated_by}` : ""}
+                <div class="mt-2.5 pt-2 border-t flex justify-between items-center text-xs gap-2">
+                  <div class="text-gray-500 leading-relaxed">
+                    ${r.visit_date ? `<span class="text-blue-600 font-semibold">출장: ${r.visit_date}</span>${r.visitor ? ` (${r.visitor})` : ""}<br/>` : (r.visitor ? `방문자: ${r.visitor}<br/>` : "")}
+                    <span>작성일: ${createdStr}</span> · <span>작성:${r.created_by}${r.updated_by ? `/수정:${r.updated_by}` : ""}</span>
                   </div>
-                  <div>
+                  <div class="shrink-0">
                     ${r.phone ? `<a href="tel:${r.phone}" onclick="event.stopPropagation()" class="bg-green-500 text-white px-2.5 py-1 rounded-lg font-semibold">📞 전화</a>` : ""}
                   </div>
                 </div>
@@ -786,7 +804,7 @@
               <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
             </div>
 
-            ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">최초 작성: <b>${r.created_by}</b> (${r.created_at?.slice(0,16).replace("T"," ")}) / 최종 수정: <b>${r.updated_by || "-"}</b></div>` : ""}
+            ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">작성일: <b>${formatDateTime(r.created_at)}</b> (작성자: <b>${r.created_by}</b>) / 최종 수정: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
 
             <div class="grid grid-cols-2 gap-3 text-sm">
               ${sysCols.map(c => {
