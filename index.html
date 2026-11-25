@@ -65,7 +65,12 @@
     const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note"];
     const DATE_KEYS = ["receipt_date", "visit_date", "completed_date", "created_at"];
     const NUMBER_KEYS = ["repair_cost", "parts_cost", "vat_cost", "total_cost"];
-    const URGENCY_RANK = { "최긴급": 3, "긴급": 2, "일반": 1 };
+    const URGENCY_RANK = {
+      "매우긴급": 4, "최긴급": 4,
+      "다소긴급": 3, "긴급": 3,
+      "보통": 2, "일반": 2,
+      "낮음": 1
+    };
 
     function formatDateTime(isoStr) {
       if (!isoStr) return "";
@@ -361,7 +366,7 @@
         customer_name: f.customer_name?.value.trim() || "",
         receipt_date: f.receipt_date?.value || new Date().toISOString().slice(0,10),
         status: f.status?.value || "접수",
-        urgency: f.urgency?.value || "일반",
+        urgency: f.urgency?.value || "보통",
         visit_date: f.visit_date?.value || null,
         region_sido: f.region_sido?.value || "",
         region_sigun: f.region_sigun?.value.trim() || "",
@@ -506,7 +511,7 @@
           return ((a[key] || 0) - (b[key] || 0)) * mult;
         }
         if (key === "urgency") {
-          return ((URGENCY_RANK[a.urgency] || 1) - (URGENCY_RANK[b.urgency] || 1)) * mult;
+          return ((URGENCY_RANK[a.urgency] || 2) - (URGENCY_RANK[b.urgency] || 2)) * mult;
         }
         if (key === "region_sido") {
           const va = `${a.region_sido || ""} ${a.region_sigun || ""}`.trim();
@@ -600,19 +605,20 @@
     }
 
     function statusBadge(st) {
-      const map = {
-        "접수": "bg-red-100 text-red-700",
-        "처리중": "bg-blue-100 text-blue-700",
-        "대기중": "bg-yellow-100 text-yellow-800",
-        "처리완료": "bg-green-100 text-green-700",
-        "보류": "bg-gray-200 text-gray-700"
-      };
-      return map[st] || "bg-purple-100 text-purple-700";
+      const clean = (st || "").replace(/\s+/g, "");
+      if (clean === "접수") return "bg-blue-100 text-blue-700";
+      if (clean === "부품대기") return "bg-red-100 text-red-700";
+      if (clean === "처리완료") return "bg-green-100 text-green-700";
+      if (clean === "처리중" || clean === "대기중") return "bg-yellow-100 text-yellow-800";
+      if (clean === "보류") return "bg-gray-200 text-gray-700";
+      return "bg-purple-100 text-purple-700";
     }
 
     function urgencyBadge(ug) {
-      if (ug === "최긴급") return "bg-red-600 text-white";
-      if (ug === "긴급") return "bg-orange-100 text-orange-700";
+      const clean = (ug || "").replace(/\s+/g, "");
+      if (clean === "매우긴급" || clean === "최긴급") return "bg-red-600 text-white";
+      if (clean === "다소긴급" || clean === "긴급") return "bg-orange-100 text-orange-700";
+      if (clean === "낮음") return "bg-sky-100 text-sky-700";
       return "bg-gray-100 text-gray-600";
     }
 
@@ -696,7 +702,7 @@
             <tbody class="divide-y">
               ${filtered.map(r => {
                 const pt = r.payment_type || "현금";
-                const ug = r.urgency || "일반";
+                const ug = r.urgency || "보통";
                 const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
                 const createdStr = formatDateTime(r.created_at);
                 const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
@@ -732,7 +738,7 @@
         <div class="md:hidden space-y-3">
           ${filtered.map(r => {
             const pt = r.payment_type || "현금";
-            const ug = r.urgency || "일반";
+            const ug = r.urgency || "보통";
             const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
             const createdStr = formatDateTime(r.created_at);
             const fullAddr = `${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}`.replace(/\s+/g, " ").trim();
@@ -742,7 +748,7 @@
               <div class="flex justify-between items-start mb-2">
                 <div class="flex items-center gap-1.5 flex-wrap">
                   <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${statusBadge(r.status)}">${r.status}</span>
-                  ${ug !== "일반" ? `<span class="px-2 py-0.5 rounded text-xs font-bold ${urgencyBadge(ug)}">${ug}</span>` : ""}
+                  ${ug ? `<span class="px-2 py-0.5 rounded text-xs font-bold ${urgencyBadge(ug)}">${ug}</span>` : ""}
                   <span class="font-bold text-base">${r.customer_name}</span>
                 </div>
                 <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
@@ -814,7 +820,7 @@
         return;
       }
 
-      const statusOpts = getCfg("status")?.options || ["접수","처리중","대기중","처리완료","보류"];
+      const statusOpts = getCfg("status")?.options || ["접수","처리중","부품대기","처리완료","보류"];
       const sidoOpts = getCfg("region_sido")?.options || ["서울","경기","인천","강원","충북","충남","대전","세종","전북","전남","광주","경북","경남","대구","울산","부산","제주"];
 
       const modelSet = new Set([
@@ -1030,6 +1036,7 @@
     function renderFormModal() {
       const r = state.editingRecord || {};
       const today = new Date().toISOString().slice(0, 10);
+      const defaultUrgency = (getCfg("urgency")?.options || []).includes("보통") ? "보통" : "일반";
 
       const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
       const customCols = state.configs.filter(c => !c.is_system);
@@ -1059,7 +1066,7 @@
                 let val = r[c.field_key] ?? "";
                 if (!r.id && c.field_key === "receipt_date") val = today;
                 if (!r.id && c.field_key === "status") val = "접수";
-                if (!r.id && c.field_key === "urgency") val = "일반";
+                if (!r.id && c.field_key === "urgency") val = defaultUrgency;
                 if (!r.id && c.field_key === "receipt_channel") val = "전화";
                 if (!r.id && c.field_key === "replacement_type") val = "해당없음";
                 return renderDynamicInput(c, val, c.field_key === "customer_name");
