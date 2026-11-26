@@ -166,16 +166,16 @@
       return String(val).slice(0, 10);
     }
 
-    function calcLeadDays(receiptDate, dueDate) {
-      if (!receiptDate || !dueDate) return null;
-      const d1 = new Date(receiptDate + "T00:00:00");
-      const d2 = new Date(dueDate + "T00:00:00");
+    function calcLeadDays(startDate, endDate) {
+      if (!startDate || !endDate) return null;
+      const d1 = new Date(String(startDate).slice(0, 10) + "T00:00:00");
+      const d2 = new Date(String(endDate).slice(0, 10) + "T00:00:00");
       if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return null;
       return Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
     }
 
-    function formatLeadDaysText(receiptDate, dueDate) {
-      const diff = calcLeadDays(receiptDate, dueDate);
+    function formatLeadDaysText(startDate, endDate) {
+      const diff = calcLeadDays(startDate, endDate);
       if (diff === null) return "-";
       if (diff === 0) return "당일 (0일)";
       return `${diff}일`;
@@ -298,21 +298,30 @@
       el.innerText = formatLeadDaysText(rDate, dDate);
     }
 
-    function toggleOrderOption(btnEl) {
+    function updateAsModalElapsedDays() {
+      const form = document.getElementById("asRecordForm");
+      const el = document.getElementById("asModalElapsedDisplay");
+      if (!form || !el) return;
+      const rDate = form.receipt_date?.value || "";
+      const cDate = form.completed_date?.value || "";
+      el.innerText = formatLeadDaysText(rDate, cDate);
+    }
+
+    function toggleMultiSelectChip(btnEl, inputId, wrapId, countId) {
       const opt = btnEl.getAttribute("data-opt");
-      const hiddenInp = document.getElementById("inpOptionAdd");
-      const wrap = document.getElementById("optionAddWrap");
-      const countBadge = document.getElementById("optionAddCount");
+      const hiddenInp = document.getElementById(inputId);
+      const wrap = document.getElementById(wrapId);
+      const countBadge = document.getElementById(countId);
       if (!hiddenInp || !wrap) return;
 
       let selected = hiddenInp.value
         ? hiddenInp.value.split(",").map(s => s.trim()).filter(Boolean)
         : [];
 
-      if (opt === "없음") {
-        selected = selected.includes("없음") ? [] : ["없음"];
+      if (opt === "없음" || opt === "해당없음") {
+        selected = selected.includes(opt) ? [] : [opt];
       } else {
-        selected = selected.filter(item => item !== "없음");
+        selected = selected.filter(item => item !== "없음" && item !== "해당없음");
         if (selected.includes(opt)) {
           selected = selected.filter(item => item !== opt);
         } else {
@@ -553,7 +562,7 @@
         state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
       } else {
         state.sortKey = key;
-        state.sortDir = (DATE_KEYS.includes(key) || NUMBER_KEYS.includes(key) || key === "urgency") ? "desc" : "asc";
+        state.sortDir = (DATE_KEYS.includes(key) || NUMBER_KEYS.includes(key) || key === "urgency" || key === "elapsed_days") ? "desc" : "asc";
       }
       renderRecordsArea();
     }
@@ -825,6 +834,8 @@
         customFields[c.field_key] = f["custom_" + c.field_key]?.value || "";
       });
 
+      const symptomCatVal = (document.getElementById("inpSymptomCategory")?.value || f.symptom_category?.value || "").trim();
+
       const payload = {
         customer_name: customerName,
         receipt_date: receiptDate,
@@ -836,7 +847,7 @@
         address_detail: f.address_detail?.value.trim() || "",
         phone: phoneVal,
         model_name: modelName,
-        symptom_category: f.symptom_category?.value || "",
+        symptom_category: symptomCatVal,
         symptom_detail: f.symptom_detail?.value.trim() || "",
         phone_action: f.phone_action?.value.trim() || "",
         special_note: f.special_note?.value.trim() || "",
@@ -1026,7 +1037,7 @@
       if (state.search) {
         const q = state.search.toLowerCase().trim();
         const qDigits = q.replace(/-/g, "");
-        const target = `${r.customer_name} ${r.phone} ${r.dealer_phone} ${r.model_name} ${r.serial_number} ${r.dealer_name} ${r.visitor} ${r.region_sido} ${r.region_sigun} ${r.address_detail} ${r.symptom_detail} ${r.created_by}`.toLowerCase();
+        const target = `${r.customer_name} ${r.phone} ${r.dealer_phone} ${r.model_name} ${r.serial_number} ${r.dealer_name} ${r.visitor} ${r.region_sido} ${r.region_sigun} ${r.address_detail} ${r.symptom_category} ${r.symptom_detail} ${r.created_by}`.toLowerCase();
         const phoneDigits = `${r.phone || ""} ${r.dealer_phone || ""}`.replace(/-/g, "");
         if (!target.includes(q) && !(qDigits && phoneDigits.includes(qDigits))) return false;
       }
@@ -1043,6 +1054,14 @@
       const mult = state.sortDir === "asc" ? 1 : -1;
 
       return [...filtered].sort((a, b) => {
+        if (key === "elapsed_days") {
+          const da = calcLeadDays(a.receipt_date, a.completed_date);
+          const db = calcLeadDays(b.receipt_date, b.completed_date);
+          if (da === null && db === null) return 0;
+          if (da === null) return 1;
+          if (db === null) return -1;
+          return (da - db) * mult;
+        }
         if (key === "vat_cost") {
           const va = getVatAmount(a.payment_type || "", a.repair_cost, a.parts_cost);
           const vb = getVatAmount(b.payment_type || "", b.repair_cost, b.parts_cost);
@@ -1074,7 +1093,7 @@
     // KOASIS 발주 대장 필터
     function matchesOrderBaseFilters(r) {
       if (state.orderModelFilter !== "전체" && (r.model_name || "") !== state.orderModelFilter) return false;
-      if (state.orderOrdererFilter !== "전체" && (r.orderer || "") !== state.ordererFilter) return false;
+      if (state.orderOrdererFilter !== "전체" && (r.orderer || "") !== state.orderOrdererFilter) return false;
       if (state.orderDestTypeFilter !== "전체" && (r.dest_type || "") !== state.orderDestTypeFilter) return false;
 
       if (state.orderDateRangeMode) {
@@ -1181,6 +1200,7 @@
 
         headers = [
           ...sysCols.map(c => c.field_label),
+          "소요일",
           ...customCols.map(c => c.field_label),
           "출장비구분", "출장비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
         ];
@@ -1190,6 +1210,7 @@
           const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
           return [
             ...sysCols.map(c => r[c.field_key] ?? ""),
+            formatLeadDaysText(r.receipt_date, r.completed_date),
             ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
             pt,
             r.repair_cost || 0,
@@ -1388,11 +1409,14 @@
                 ${renderSortTh("urgency", "긴급도")}
                 ${renderSortTh("customer_name", "고객명")}
                 ${renderSortTh("receipt_date", "접수일자")}
+                ${renderSortTh("completed_date", "처리완료일")}
+                ${renderSortTh("elapsed_days", "소요일")}
                 ${renderSortTh("visit_date", "출장예정일")}
                 ${renderSortTh("visitor", "방문자")}
                 ${renderSortTh("region_sido", "지역")}
                 ${renderSortTh("phone", "연락처")}
                 ${renderSortTh("model_name", "모델(기대번호)")}
+                ${renderSortTh("symptom_category", "증상 분류")}
                 ${renderSortTh("symptom_detail", "접수시 증상")}
                 ${renderSortTh("payment_type", "구분")}
                 ${renderSortTh("repair_cost", "출장비", true)}
@@ -1408,6 +1432,7 @@
                 const pt = r.payment_type || "";
                 const ug = r.urgency || "보통";
                 const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
+                const elapsedText = formatLeadDaysText(r.receipt_date, r.completed_date);
                 const createdStr = formatDateTime(r.created_at);
                 const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
                 return `
@@ -1416,11 +1441,16 @@
                   <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-bold ${urgencyBadge(ug)}">${ug}</span></td>
                   <td class="p-3 font-bold text-slate-900">${r.customer_name}</td>
                   <td class="p-3 text-slate-600">${r.receipt_date || ""}</td>
+                  <td class="p-3 text-emerald-700 font-semibold">${r.completed_date || "-"}</td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-semibold">${elapsedText}</span></td>
                   <td class="p-3 text-blue-600 font-semibold">${r.visit_date || "-"}</td>
                   <td class="p-3">${r.visitor || "-"}</td>
                   <td class="p-3">${r.region_sido || ""} ${r.region_sigun || ""}</td>
                   <td class="p-3 font-mono text-xs">${r.phone || ""}</td>
                   <td class="p-3">${r.model_name || ""} ${r.serial_number ? `<span class="text-xs text-slate-400">(${r.serial_number})</span>` : ""}</td>
+                  <td class="p-3">
+                    ${r.symptom_category ? r.symptom_category.split(",").map(s => `<span class="inline-block mr-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-xs font-semibold">${s.trim()}</span>`).join("") : "-"}
+                  </td>
                   <td class="p-3 max-w-xs truncate text-slate-700">${r.symptom_detail || ""}</td>
                   <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${paymentBadge(pt)}">${pt || "미선택"}</span></td>
                   <td class="p-3 text-right text-slate-600">${(r.repair_cost || 0).toLocaleString()}원</td>
@@ -1444,6 +1474,7 @@
             const pt = r.payment_type || "";
             const ug = r.urgency || "보통";
             const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
+            const elapsedText = formatLeadDaysText(r.receipt_date, r.completed_date);
             const createdStr = formatDateTime(r.created_at);
             const fullAddr = `${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}`.replace(/\s+/g, " ").trim();
             const safeAddr = fullAddr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
@@ -1455,14 +1486,22 @@
                   ${ug ? `<span class="px-2 py-0.5 rounded-md text-[11px] font-bold ${urgencyBadge(ug)}">${ug}</span>` : ""}
                   <span class="font-extrabold text-base text-slate-900">${r.customer_name}</span>
                 </div>
-                <span class="text-[11px] font-medium text-slate-400 shrink-0">접수 ${r.receipt_date || ""}</span>
+                <div class="text-right shrink-0">
+                  <div class="text-[11px] font-medium text-slate-400">접수 ${r.receipt_date || ""}</div>
+                  ${r.completed_date ? `<div class="text-[11px] font-bold text-emerald-700">완료 ${r.completed_date} (${elapsedText})</div>` : ""}
+                </div>
               </div>
               <div class="text-sm text-slate-700 space-y-2">
                 <div class="flex items-center justify-between gap-2 bg-slate-50/90 border border-slate-200/70 px-2.5 py-1.5 rounded-xl">
                   <span class="flex-1 leading-snug text-xs text-slate-700">📍 ${fullAddr || "주소 미입력"}</span>
                   ${fullAddr ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-white active:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg text-[11px] font-bold shadow-2xs">📋 복사</button>` : ""}
                 </div>
-                <div class="text-xs sm:text-sm">🔧 <b class="text-slate-900">${r.model_name || "모델미입력"}</b> ${r.serial_number ? `<span class="text-xs text-slate-500">(${r.serial_number})</span>` : ""} · <span class="text-slate-600">${r.symptom_category || ""}</span></div>
+                <div class="text-xs sm:text-sm">🔧 <b class="text-slate-900">${r.model_name || "모델미입력"}</b> ${r.serial_number ? `<span class="text-xs text-slate-500">(${r.serial_number})</span>` : ""}</div>
+                ${r.symptom_category ? `
+                  <div class="flex flex-wrap gap-1">
+                    ${r.symptom_category.split(",").map(s => `<span class="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-100 text-indigo-700 text-[11px] font-bold"># ${s.trim()}</span>`).join("")}
+                  </div>
+                ` : ""}
                 ${r.dealer_name ? `<div class="text-xs text-slate-500">🏢 대리점: ${r.dealer_name} ${r.dealer_phone ? `(${r.dealer_phone})` : ""}</div>` : ""}
                 <div class="text-slate-700 bg-slate-50 border border-slate-100 p-2.5 rounded-xl text-xs leading-relaxed">${r.symptom_detail || "증상 내용 없음"}</div>
               </div>
@@ -1861,7 +1900,7 @@
           <main class="max-w-7xl mx-auto p-3.5 sm:p-4 pb-24">
             <div class="bg-white p-3.5 rounded-2xl shadow-sm border border-slate-200/80 mb-3 space-y-2.5">
               <div class="flex gap-2 items-center">
-                <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처, 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border border-slate-300 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처, 모델, 기대번호, 대리점, 방문자, 지역, 증상 검색..." class="flex-1 border border-slate-300 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold">초기화</button>
                 <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-extrabold shadow-sm">+ 새 AS 접수</button>
               </div>
@@ -1903,6 +1942,8 @@
                 <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-blue-200 rounded-xl px-2.5 py-2 text-sm bg-blue-50/60 font-bold text-blue-900">
                   <option value="created_at:desc" ${currentSortVal==="created_at:desc"?"selected":""}>정렬: 작성일 최신순 ▼</option>
                   <option value="receipt_date:desc" ${currentSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일자 최신순 ▼</option>
+                  <option value="completed_date:desc" ${currentSortVal==="completed_date:desc"?"selected":""}>정렬: 처리완료일 최신순 ▼</option>
+                  <option value="elapsed_days:desc" ${currentSortVal==="elapsed_days:desc"?"selected":""}>정렬: 소요일 긴순 ▼</option>
                   <option value="visit_date:asc" ${currentSortVal==="visit_date:asc"?"selected":""}>정렬: 출장예정일 빠른순 ▲</option>
                   <option value="urgency:desc" ${currentSortVal==="urgency:desc"?"selected":""}>정렬: 긴급도 높은순 ▼</option>
                   <option value="status:asc" ${currentSortVal==="status:asc"?"selected":""}>정렬: 상태순 ▲</option>
@@ -2004,28 +2045,39 @@
     function renderDynamicInput(cfg, val, isRequired = false) {
       const nameAttr = cfg.is_system ? cfg.field_key : `custom_${cfg.field_key}`;
       const reqAttr = isRequired ? "required" : "";
-      const isMultiOption = (state.activeTab === "order" && cfg.field_key === "option_add");
-      const isFullSpan = (cfg.field_key === "address_detail" || cfg.field_key === "dest_address" || cfg.field_type === "textarea" || isMultiOption);
+      const isOrderMultiOption = (state.activeTab === "order" && cfg.field_key === "option_add");
+      const isAsSymptomMulti = (state.activeTab === "as" && cfg.field_key === "symptom_category");
+      const isMultiChip = isOrderMultiOption || isAsSymptomMulti;
+      const isFullSpan = (cfg.field_key === "address_detail" || cfg.field_key === "dest_address" || cfg.field_type === "textarea" || isMultiChip);
       const fullSpan = isFullSpan ? "col-span-2" : "";
       const isPhone = PHONE_KEYS.includes(cfg.field_key);
       const isOrderDateTrigger = state.activeTab === "order" && (cfg.field_key === "receipt_date" || cfg.field_key === "due_date");
+      const isAsDateTrigger = state.activeTab === "as" && (cfg.field_key === "receipt_date" || cfg.field_key === "completed_date");
 
-      if (isMultiOption) {
+      if (isMultiChip) {
+        const inputId = isOrderMultiOption ? "inpOptionAdd" : "inpSymptomCategory";
+        const wrapId = isOrderMultiOption ? "optionAddWrap" : "symptomCatWrap";
+        const countId = isOrderMultiOption ? "optionAddCount" : "symptomCatCount";
         const selected = String(val || "").split(",").map(s => s.trim()).filter(Boolean);
-        const allOpts = Array.from(new Set([...(cfg.options || []), ...selected]));
+        const defaultSymptomOpts = ["전원/통신불량", "센서이상", "EC/pH이상", "펌프/밸브이상", "관수제어이상", "프로그램/설정", "누수/배관", "기타"];
+        const baseOpts = (cfg.options && cfg.options.length > 0)
+          ? cfg.options
+          : (isAsSymptomMulti ? defaultSymptomOpts : []);
+        const allOpts = Array.from(new Set([...baseOpts, ...selected]));
+
         return `
           <div class="${fullSpan} bg-indigo-50/60 border border-indigo-200/80 rounded-2xl p-3">
             <div class="flex justify-between items-center mb-2">
               <label class="block font-bold text-slate-800">${cfg.field_label} <span class="text-xs font-normal text-indigo-700">(중복 선택 가능)</span></label>
-              <span id="optionAddCount" class="text-xs font-extrabold text-indigo-700">${selected.length > 0 ? `${selected.length}개 선택됨` : ""}</span>
+              <span id="${countId}" class="text-xs font-extrabold text-indigo-700">${selected.length > 0 ? `${selected.length}개 선택됨` : ""}</span>
             </div>
-            <input type="hidden" id="inpOptionAdd" name="option_add" value="${selected.join(", ").replace(/"/g, "&quot;")}" />
-            <div id="optionAddWrap" class="flex flex-wrap gap-1.5">
+            <input type="hidden" id="${inputId}" name="${nameAttr}" value="${selected.join(", ").replace(/"/g, "&quot;")}" />
+            <div id="${wrapId}" class="flex flex-wrap gap-1.5">
               ${allOpts.map(o => {
                 const active = selected.includes(o);
                 const safeOpt = o.replace(/"/g, "&quot;");
                 return `
-                  <button type="button" data-opt="${safeOpt}" onclick="toggleOrderOption(this)"
+                  <button type="button" data-opt="${safeOpt}" onclick="toggleMultiSelectChip(this, '${inputId}', '${wrapId}', '${countId}')"
                     class="${active
                       ? "px-2.5 py-1.5 rounded-lg text-xs font-bold border transition bg-indigo-600 text-white border-indigo-600 shadow-xs"
                       : "px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition bg-white text-slate-700 border-slate-300 hover:bg-indigo-50"}">
@@ -2046,7 +2098,9 @@
             ${val && !opts.includes(val) ? `<option value="${val}" selected>${val}</option>` : ""}
           </select>`;
       } else if (cfg.field_type === "date" || DATE_KEYS.includes(cfg.field_key)) {
-        const onChangeAttr = isOrderDateTrigger ? `onchange="updateModalLeadTime()"` : "";
+        const onChangeAttr = isOrderDateTrigger
+          ? `onchange="updateModalLeadTime()"`
+          : (isAsDateTrigger ? `onchange="updateAsModalElapsedDays()"` : "");
         inputHtml = `<input type="date" name="${nameAttr}" value="${val}" ${onChangeAttr} ${reqAttr} class="w-full border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />`;
       } else if (cfg.field_type === "textarea" || TEXTAREA_KEYS.includes(cfg.field_key)) {
         inputHtml = `<textarea name="${nameAttr}" rows="2" ${reqAttr} class="w-full border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">${val}</textarea>`;
@@ -2080,6 +2134,10 @@
       const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
       const customCols = state.configs.filter(c => !c.is_system);
 
+      const initReceipt = r.id ? (r.receipt_date || "") : today;
+      const initCompleted = r.completed_date || "";
+      const elapsedText = formatLeadDaysText(initReceipt, initCompleted);
+
       const payType = r.payment_type ?? "";
       const repair = r.repair_cost || 0;
       const parts = r.parts_cost || 0;
@@ -2112,7 +2170,15 @@
                 if (!r.id && c.field_key === "urgency") val = defaultUrgency;
                 if (!r.id && c.field_key === "receipt_channel") val = "전화";
                 if (!r.id && c.field_key === "replacement_type") val = "해당없음";
-                return renderDynamicInput(c, val, REQUIRED_KEYS.includes(c.field_key));
+                const fieldHtml = renderDynamicInput(c, val, REQUIRED_KEYS.includes(c.field_key));
+                if (c.field_key === "completed_date") {
+                  return fieldHtml + `
+                    <div class="col-span-2 bg-emerald-50/80 border border-emerald-200/80 rounded-2xl px-3.5 py-2.5 flex justify-between items-center text-xs sm:text-sm">
+                      <span class="font-bold text-emerald-900">⏱️ 소요일 (접수일자 ~ 처리완료일 자동 계산)</span>
+                      <span id="asModalElapsedDisplay" class="font-extrabold text-emerald-700 text-base">${elapsedText}</span>
+                    </div>`;
+                }
+                return fieldHtml;
               }).join("")}
             </div>
 
