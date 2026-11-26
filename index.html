@@ -1178,7 +1178,7 @@
                 if (!r.id && c.field_key === "receipt_date") val = today;
                 if (!r.id && c.field_key === "status") val = "접수";
                 if (!r.id && c.field_key === "urgency") val = defaultUrgency;
-                if (!r.id && c.field_key === "receipt_channel") val = "전화";
+                if (!r.id && c.field_key === "receipt_channel") val = "";
                 if (!r.id && c.field_key === "replacement_type") val = "해당없음";
                 return renderDynamicInput(c, val, REQUIRED_KEYS.includes(c.field_key));
               }).join("")}
