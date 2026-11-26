@@ -84,6 +84,23 @@
       "serial_number", "dest_type", "dest_address", "dest_phone", "remarks"
     ];
 
+    // DB 설정 테이블이 비어 있을 때를 대비한 발주 대장 기본 항목 정의
+    const DEFAULT_ORDER_CONFIGS = [
+      { field_key: "client_name", field_label: "발주처", field_type: "text", options: [], is_system: true, sort_order: 1 },
+      { field_key: "shipment_status", field_label: "출고 현황", field_type: "select", options: ["발주접수","자재준비","생산중","출고대기","출고완료","보류"], is_system: true, sort_order: 2 },
+      { field_key: "receipt_date", field_label: "접수일", field_type: "date", options: [], is_system: true, sort_order: 3 },
+      { field_key: "due_date", field_label: "납기일", field_type: "date", options: [], is_system: true, sort_order: 4 },
+      { field_key: "model_name", field_label: "모델명", field_type: "text", options: [], is_system: true, sort_order: 5 },
+      { field_key: "orderer", field_label: "발주자", field_type: "text", options: [], is_system: true, sort_order: 6 },
+      { field_key: "pump_change", field_label: "펌프 변경", field_type: "select", options: ["변경없음","용량변경","사양변경","별도문의"], is_system: true, sort_order: 7 },
+      { field_key: "option_add", field_label: "옵션 추가", field_type: "select", options: ["없음","EC/pH센서","일사센서","외부접점","통신모듈","기타옵션"], is_system: true, sort_order: 8 },
+      { field_key: "serial_number", field_label: "기대번호", field_type: "text", options: [], is_system: true, sort_order: 9 },
+      { field_key: "dest_type", field_label: "출고지 유형", field_type: "select", options: ["농가직송","대리점","화물","방문수령","기타"], is_system: true, sort_order: 10 },
+      { field_key: "dest_address", field_label: "출고지 주소", field_type: "text", options: [], is_system: true, sort_order: 11 },
+      { field_key: "dest_phone", field_label: "출고지 전화번호", field_type: "text", options: [], is_system: true, sort_order: 12 },
+      { field_key: "remarks", field_label: "비고", field_type: "textarea", options: [], is_system: true, sort_order: 13 }
+    ];
+
     const REQUIRED_KEYS = ["customer_name", "receipt_date", "phone", "model_name"];
     const ORDER_REQUIRED_KEYS = ["client_name", "receipt_date", "model_name"];
     const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note", "remarks"];
@@ -419,7 +436,15 @@
       if (recRes.data) state.records = recRes.data;
       if (cfgRes.data) state.configs = cfgRes.data;
       if (ordRes.data) state.orderRecords = ordRes.data;
-      if (ordCfgRes.data) state.orderConfigs = ordCfgRes.data;
+      if (ordCfgRes.data && ordCfgRes.data.length > 0) {
+        state.orderConfigs = ordCfgRes.data;
+      } else if (!ordCfgRes.error && ordCfgRes.data && ordCfgRes.data.length === 0) {
+        // 테이블은 만들어져 있으나 초기 데이터가 비어 있는 경우 자동 채움
+        const { data: inserted } = await sb.from("order_field_configs").insert(DEFAULT_ORDER_CONFIGS).select("*").order("sort_order", { ascending: true });
+        state.orderConfigs = inserted && inserted.length > 0 ? inserted : DEFAULT_ORDER_CONFIGS;
+      } else {
+        state.orderConfigs = DEFAULT_ORDER_CONFIGS;
+      }
     }
 
     function getSavedCredentials() {
@@ -649,11 +674,21 @@
 
       if (state.editingRecord) {
         const { error } = await sb.from("order_records").update(payload).eq("id", state.editingRecord.id);
-        if (error) return alert("수정 오류: " + error.message);
+        if (error) {
+          if (error.message.includes("order_records")) {
+            return alert("Supabase에 발주 대장 테이블(order_records)이 아직 생성되지 않았습니다.\nSupabase SQL Editor에서 1단계 SQL을 먼저 실행해 주세요!");
+          }
+          return alert("수정 오류: " + error.message);
+        }
       } else {
         payload.created_by = state.username;
         const { error } = await sb.from("order_records").insert([payload]);
-        if (error) return alert("등록 오류: " + error.message);
+        if (error) {
+          if (error.message.includes("order_records")) {
+            return alert("Supabase에 발주 대장 테이블(order_records)이 아직 생성되지 않았습니다.\nSupabase SQL Editor에서 1단계 SQL을 먼저 실행해 주세요!");
+          }
+          return alert("등록 오류: " + error.message);
+        }
       }
 
       state.modalOpen = false;
@@ -897,7 +932,7 @@
         headers = [
           ...sysCols.map(c => c.field_label),
           ...customCols.map(c => c.field_label),
-          "수리비구분", "수리비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
+          "수리비구분", "출장비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
         ];
 
         dataRows = rows.map(r => {
@@ -996,9 +1031,9 @@
         } else if (payType === "무상") {
           subEl.innerText = `(내부 발생비용 ${(r+p).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
         } else if (payType === "현금") {
-          subEl.innerText = `(수리비 + 부품비 / 부가세 0원)`;
+          subEl.innerText = `(출장비 + 부품비 / 부가세 0원)`;
         } else {
-          subEl.innerText = `(수리비 + 부품비 / 수리비 구분 미선택)`;
+          subEl.innerText = `(출장비 + 부품비 / 수리비 구분 미선택)`;
         }
       }
     }
@@ -1008,7 +1043,7 @@
     }
 
     function getOrderCfg(key) {
-      return state.orderConfigs.find(c => c.field_key === key);
+      return state.orderConfigs.find(c => c.field_key === key) || DEFAULT_ORDER_CONFIGS.find(c => c.field_key === key);
     }
 
     function renderSortTh(key, label, alignRight = false) {
@@ -1088,7 +1123,7 @@
                 ${renderSortTh("model_name", "모델(기대번호)")}
                 ${renderSortTh("symptom_detail", "접수시 증상")}
                 ${renderSortTh("payment_type", "구분")}
-                ${renderSortTh("repair_cost", "수리비", true)}
+                ${renderSortTh("repair_cost", "출장비", true)}
                 ${renderSortTh("parts_cost", "부품비", true)}
                 ${renderSortTh("vat_cost", "부가세", true)}
                 ${renderSortTh("total_cost", "합계금액", true)}
@@ -1374,12 +1409,10 @@
       const isOrder = state.activeTab === "order";
       const exportRows = state.exportModalOpen ? getExportTargetRecords() : [];
 
-      // 상단 공통 헤더 (맨 왼쪽 상단 2개 카테고리 메뉴 포함)
       const headerHtml = `
         <header class="bg-white border-b sticky top-0 z-20">
           <div class="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
             <div class="flex items-center gap-2 flex-wrap">
-              <!-- 맨 왼쪽 상단 카테고리 전환 메뉴 -->
               <nav class="inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200">
                 <button type="button" onclick="switchTab('as')" class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition ${!isOrder ? "bg-blue-600 text-white shadow-xs" : "text-gray-600 hover:text-gray-900"}">
                   AS 접수 대장
@@ -1401,7 +1434,6 @@
         </header>
       `;
 
-      // 메인 영역 (AS 접수 대장 vs KOASIS 발주 대장)
       let mainHtml = "";
       if (isOrder) {
         const ordStatusOpts = getOrderCfg("shipment_status")?.options || ["발주접수","자재준비","생산중","출고대기","출고완료","보류"];
@@ -1707,10 +1739,10 @@
       const vat = getVatAmount(payType, repair, parts);
       const total = calculateTotal(payType, repair, parts);
 
-      let subText = "(수리비 + 부품비 / 수리비 구분 미선택)";
+      let subText = "(출장비 + 부품비 / 수리비 구분 미선택)";
       if (payType === "세금계산서") subText = `(공급가 ${(repair+parts).toLocaleString()}원 + 부가세 ${vat.toLocaleString()}원)`;
       if (payType === "무상") subText = `(내부 발생비용 ${(repair+parts).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
-      if (payType === "현금") subText = "(수리비 + 부품비 / 부가세 0원)";
+      if (payType === "현금") subText = "(출장비 + 부품비 / 부가세 0원)";
 
       return `
         <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
@@ -1757,7 +1789,7 @@
                   </select>
                 </div>
                 <div>
-                  <label class="block font-medium text-xs mb-1">수리비 (원)</label>
+                  <label class="block font-medium text-xs mb-1">출장비 (원)</label>
                   <input id="inpRepairCost" type="number" name="repair_cost" value="${repair}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
                 </div>
                 <div>
@@ -1864,24 +1896,26 @@
       const renderConfigRow = (c) => {
         const isSelect = c.field_type === "select";
         const isDate = c.field_type === "date" || DATE_KEYS.includes(c.field_key);
+        const hasDbId = Boolean(c.id);
         return `
           <div class="bg-gray-50 p-3 rounded-lg space-y-2 border">
             <div class="flex justify-between items-center gap-2">
               <div class="font-bold text-gray-800">${c.field_label}</div>
               <div class="flex items-center gap-1.5">
-                ${!isDate ? `
+                ${!isDate && hasDbId ? `
                   <select id="type_${c.id}" onchange="document.getElementById('optwrap_${c.id}').style.display=this.value==='select'?'block':'none'" class="border rounded px-2 py-1 text-xs bg-white">
                     <option value="text" ${!isSelect ? "selected" : ""}>직접 입력(텍스트)</option>
                     <option value="select" ${isSelect ? "selected" : ""}>선택형(드롭다운)</option>
                   </select>
                   <button onclick="saveFieldConfig('${c.id}', '${c.field_key}')" class="px-2.5 py-1 bg-blue-600 text-white rounded text-xs font-semibold">적용</button>
-                ` : `<span class="text-xs text-gray-400">날짜 입력형</span>`}
-                ${!c.is_system ? `<button onclick="deleteCustomField('${c.id}')" class="px-2 py-1 bg-red-50 text-red-600 rounded text-xs">삭제</button>` : ""}
+                ` : `<span class="text-xs text-gray-400">${isDate ? "날짜 입력형" : "기본 설정"}</span>`}
+                ${!c.is_system && hasDbId ? `<button onclick="deleteCustomField('${c.id}')" class="px-2 py-1 bg-red-50 text-red-600 rounded text-xs">삭제</button>` : ""}
               </div>
             </div>
-            <div id="optwrap_${c.id}" style="display:${isSelect ? "block" : "none"}">
-              <input id="opt_${c.id}" value="${(c.options || []).join(", ")}" placeholder="선택 항목을 쉼표(,)로 구분해 입력" class="w-full border rounded px-2.5 py-1.5 text-xs bg-white" />
-            </div>
+            ${hasDbId ? `
+              <div id="optwrap_${c.id}" style="display:${isSelect ? "block" : "none"}">
+                <input id="opt_${c.id}" value="${(c.options || []).join(", ")}" placeholder="선택 항목을 쉼표(,)로 구분해 입력" class="w-full border rounded px-2.5 py-1.5 text-xs bg-white" />
+              </div>` : ""}
           </div>`;
       };
 
