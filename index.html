@@ -57,6 +57,8 @@
       orderOrdererFilter: "전체",
       orderDestTypeFilter: "전체",
       orderDateFilterKey: "receipt_date",
+      orderDateRangeMode: false, // false: 하루 지정(기본값), true: 언제~언제 기간 지정
+      orderDateSingle: "",
       orderDateFrom: "",
       orderDateTo: "",
       orderSortKey: "created_at",
@@ -421,16 +423,39 @@
       render();
     }
 
+    function toggleOrderDateRangeMode() {
+      state.orderDateRangeMode = !state.orderDateRangeMode;
+      if (state.orderDateRangeMode) {
+        if (state.orderDateSingle && !state.orderDateFrom) {
+          state.orderDateFrom = state.orderDateSingle;
+        }
+      } else {
+        if (state.orderDateFrom && !state.orderDateSingle) {
+          state.orderDateSingle = state.orderDateFrom;
+        }
+      }
+      render();
+    }
+
+    function clearOrderDateFilter() {
+      state.orderDateSingle = "";
+      state.orderDateFrom = "";
+      state.orderDateTo = "";
+      render();
+    }
+
     function hasAnyActiveFilter() {
       if (state.activeTab === "order") {
+        const hasOrderDate = state.orderDateRangeMode
+          ? Boolean(state.orderDateFrom || state.orderDateTo)
+          : Boolean(state.orderDateSingle);
         return Boolean(
           state.orderSearch ||
           state.orderStatusFilter !== "전체" ||
           state.orderModelFilter !== "전체" ||
           state.orderOrdererFilter !== "전체" ||
           state.orderDestTypeFilter !== "전체" ||
-          state.orderDateFrom ||
-          state.orderDateTo ||
+          hasOrderDate ||
           state.orderSortKey !== "created_at" ||
           state.orderSortDir !== "desc"
         );
@@ -491,6 +516,8 @@
         state.orderOrdererFilter = "전체";
         state.orderDestTypeFilter = "전체";
         state.orderDateFilterKey = "receipt_date";
+        state.orderDateRangeMode = false;
+        state.orderDateSingle = "";
         state.orderDateFrom = "";
         state.orderDateTo = "";
         state.orderSortKey = "created_at";
@@ -734,8 +761,13 @@
     function openExportModal() {
       if (state.activeTab === "order") {
         state.exportDateKey = state.orderDateFilterKey || "receipt_date";
-        state.exportDateFrom = state.orderDateFrom || "";
-        state.exportDateTo = state.orderDateTo || "";
+        if (state.orderDateRangeMode) {
+          state.exportDateFrom = state.orderDateFrom || "";
+          state.exportDateTo = state.orderDateTo || "";
+        } else {
+          state.exportDateFrom = state.orderDateSingle || "";
+          state.exportDateTo = state.orderDateSingle || "";
+        }
       } else {
         state.exportDateKey = state.dateFilterKey || "receipt_date";
         state.exportDateFrom = state.dateFrom || "";
@@ -1042,14 +1074,21 @@
     // KOASIS 발주 대장 필터
     function matchesOrderBaseFilters(r) {
       if (state.orderModelFilter !== "전체" && (r.model_name || "") !== state.orderModelFilter) return false;
-      if (state.orderOrdererFilter !== "전체" && (r.orderer || "") !== state.orderOrdererFilter) return false;
+      if (state.orderOrdererFilter !== "전체" && (r.orderer || "") !== state.ordererFilter) return false;
       if (state.orderDestTypeFilter !== "전체" && (r.dest_type || "") !== state.orderDestTypeFilter) return false;
 
-      if (state.orderDateFrom || state.orderDateTo) {
-        const dVal = getLocalDateStr(r, state.orderDateFilterKey);
-        if (!dVal) return false;
-        if (state.orderDateFrom && dVal < state.orderDateFrom) return false;
-        if (state.orderDateTo && dVal > state.orderDateTo) return false;
+      if (state.orderDateRangeMode) {
+        if (state.orderDateFrom || state.orderDateTo) {
+          const dVal = getLocalDateStr(r, state.orderDateFilterKey);
+          if (!dVal) return false;
+          if (state.orderDateFrom && dVal < state.orderDateFrom) return false;
+          if (state.orderDateTo && dVal > state.orderDateTo) return false;
+        }
+      } else {
+        if (state.orderDateSingle) {
+          const dVal = getLocalDateStr(r, state.orderDateFilterKey);
+          if (!dVal || dVal !== state.orderDateSingle) return false;
+        }
       }
 
       if (state.orderSearch) {
@@ -1729,6 +1768,9 @@
         const ordOrdererOpts = Array.from(ordOrdererSet);
 
         const curOrderSortVal = `${state.orderSortKey}:${state.orderSortDir}`;
+        const hasOrderDate = state.orderDateRangeMode
+          ? Boolean(state.orderDateFrom || state.orderDateTo)
+          : Boolean(state.orderDateSingle);
 
         mainHtml = `
           <main class="max-w-7xl mx-auto p-3.5 sm:p-4 pb-24">
@@ -1739,18 +1781,25 @@
                 <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white px-4 py-2 rounded-xl text-sm font-extrabold shadow-sm">+ 새 발주 등록</button>
               </div>
 
-              <!-- 날짜 구간 검색 바 -->
+              <!-- 날짜 검색 바 (기본값: 하루 지정 / 버튼 클릭 시 언제~언제 기간 지정) -->
               <div class="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200/70 text-sm">
                 <select onchange="state.orderDateFilterKey=this.value;render()" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm bg-white font-semibold text-slate-700">
-                  <option value="receipt_date" ${state.orderDateFilterKey==="receipt_date"?"selected":""}>기간: 접수일</option>
-                  <option value="due_date" ${state.orderDateFilterKey==="due_date"?"selected":""}>기간: 납기일</option>
-                  <option value="created_at" ${state.orderDateFilterKey==="created_at"?"selected":""}>기간: 생성일시</option>
+                  <option value="receipt_date" ${state.orderDateFilterKey==="receipt_date"?"selected":""}>날짜: 접수일</option>
+                  <option value="due_date" ${state.orderDateFilterKey==="due_date"?"selected":""}>날짜: 납기일</option>
+                  <option value="created_at" ${state.orderDateFilterKey==="created_at"?"selected":""}>날짜: 생성일시</option>
                 </select>
-                <div class="flex items-center gap-1.5 flex-1 min-w-[240px]">
-                  <input type="date" value="${state.orderDateFrom}" onchange="state.orderDateFrom=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                  <span class="text-slate-400 font-bold">~</span>
-                  <input type="date" value="${state.orderDateTo}" onchange="state.orderDateTo=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                  ${(state.orderDateFrom || state.orderDateTo) ? `<button type="button" onclick="state.orderDateFrom='';state.orderDateTo='';render()" class="px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-500 hover:text-red-600 font-semibold">해제</button>` : ""}
+                <div class="flex items-center gap-1.5 flex-1 min-w-[230px]">
+                  ${state.orderDateRangeMode ? `
+                    <input type="date" value="${state.orderDateFrom}" onchange="state.orderDateFrom=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                    <span class="text-slate-400 font-bold">~</span>
+                    <input type="date" value="${state.orderDateTo}" onchange="state.orderDateTo=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  ` : `
+                    <input type="date" value="${state.orderDateSingle}" onchange="state.orderDateSingle=this.value;render()" class="flex-1 sm:max-w-[200px] border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm bg-white font-medium" />
+                  `}
+                  <button type="button" onclick="toggleOrderDateRangeMode()" class="shrink-0 px-2.5 py-1.5 text-xs rounded-lg font-bold border transition ${state.orderDateRangeMode ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs" : "bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50"}">
+                    ${state.orderDateRangeMode ? "📅 하루 지정" : "📅 기간 지정"}
+                  </button>
+                  ${hasOrderDate ? `<button type="button" onclick="clearOrderDateFilter()" class="shrink-0 px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-500 hover:text-red-600 font-semibold">해제</button>` : ""}
                 </div>
               </div>
 
