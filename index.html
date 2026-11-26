@@ -39,7 +39,7 @@
       records: [],
       configs: [],
       search: "",
-      statusFilter: "전체",
+      statusFilters: [], // 빈 배열이면 '전체', 값이 있으면 해당 상태들 중복 표시
       sidoFilter: "전체",
       modelFilter: "전체",
       visitorFilter: "전체",
@@ -52,7 +52,7 @@
       orderRecords: [],
       orderConfigs: [],
       orderSearch: "",
-      orderStatusFilter: "전체",
+      orderStatusFilters: [], // 빈 배열이면 '전체', 값이 있으면 해당 상태들 중복 표시
       orderModelFilter: "전체",
       orderOrdererFilter: "전체",
       orderDestTypeFilter: "전체",
@@ -181,7 +181,7 @@
       return `${diff}일`;
     }
 
-    // 납기일 D-Day 및 카드/행 테마 계산 (출고완료, 출고대기, 발주취소는 경고 미적용)
+    // 납기일 D-Day 및 카드/행 테마 계산
     function getOrderDueTheme(dueDate, shipmentStatus) {
       const cleanStatus = normalizeStatus(shipmentStatus);
       if (cleanStatus === "출고완료") {
@@ -345,7 +345,7 @@
       }
     }
 
-    // 동일 스펙 복사 등록 (출고 현황 & 기대번호는 복사하지 않고 비움)
+    // 동일 스펙 복사 등록
     function duplicateOrderRecord() {
       const form = document.getElementById("orderRecordForm");
       if (!form) return;
@@ -460,7 +460,7 @@
           : Boolean(state.orderDateSingle);
         return Boolean(
           state.orderSearch ||
-          state.orderStatusFilter !== "전체" ||
+          state.orderStatusFilters.length > 0 ||
           state.orderModelFilter !== "전체" ||
           state.orderOrdererFilter !== "전체" ||
           state.orderDestTypeFilter !== "전체" ||
@@ -471,7 +471,7 @@
       }
       return Boolean(
         state.search ||
-        state.statusFilter !== "전체" ||
+        state.statusFilters.length > 0 ||
         state.sidoFilter !== "전체" ||
         state.modelFilter !== "전체" ||
         state.visitorFilter !== "전체" ||
@@ -495,24 +495,50 @@
       renderRecordsArea();
     }
 
-    function setQuickStatusFilter(st) {
+    // 상단 상태 칩 다중(중복) 선택 토글
+    function toggleQuickStatusFilter(st) {
       if (state.activeTab === "order") {
-        if (st === "전체" || st === "긴급납기") {
-          state.orderStatusFilter = st;
+        if (st === "전체") {
+          state.orderStatusFilters = [];
+        } else if (st === "긴급납기") {
+          const idx = state.orderStatusFilters.indexOf("긴급납기");
+          if (idx >= 0) state.orderStatusFilters.splice(idx, 1);
+          else state.orderStatusFilters.push("긴급납기");
         } else {
           const opts = getOrderCfg("shipment_status")?.options || [];
-          const matched = opts.find(o => normalizeStatus(o) === normalizeStatus(st));
-          state.orderStatusFilter = matched || st;
+          const matched = opts.find(o => normalizeStatus(o) === normalizeStatus(st)) || st;
+          const idx = state.orderStatusFilters.findIndex(item => normalizeStatus(item) === normalizeStatus(matched));
+          if (idx >= 0) {
+            state.orderStatusFilters.splice(idx, 1);
+          } else {
+            state.orderStatusFilters.push(matched);
+          }
         }
         render();
         return;
       }
+
       if (st === "전체") {
-        state.statusFilter = "전체";
+        state.statusFilters = [];
       } else {
         const statusOpts = getCfg("status")?.options || [];
-        const matched = statusOpts.find(o => normalizeStatus(o) === normalizeStatus(st));
-        state.statusFilter = matched || st;
+        const matched = statusOpts.find(o => normalizeStatus(o) === normalizeStatus(st)) || st;
+        const idx = state.statusFilters.findIndex(item => normalizeStatus(item) === normalizeStatus(matched));
+        if (idx >= 0) {
+          state.statusFilters.splice(idx, 1);
+        } else {
+          state.statusFilters.push(matched);
+        }
+      }
+      render();
+    }
+
+    // 드롭다운에서 단일 상태 선택 시 연동
+    function setSingleStatusDropdown(val) {
+      if (state.activeTab === "order") {
+        state.orderStatusFilters = val === "전체" ? [] : [val];
+      } else {
+        state.statusFilters = val === "전체" ? [] : [val];
       }
       render();
     }
@@ -520,7 +546,7 @@
     function resetFilters() {
       if (state.activeTab === "order") {
         state.orderSearch = "";
-        state.orderStatusFilter = "전체";
+        state.orderStatusFilters = [];
         state.orderModelFilter = "전체";
         state.orderOrdererFilter = "전체";
         state.orderDestTypeFilter = "전체";
@@ -535,7 +561,7 @@
         return;
       }
       state.search = "";
-      state.statusFilter = "전체";
+      state.statusFilters = [];
       state.sidoFilter = "전체";
       state.modelFilter = "전체";
       state.visitorFilter = "전체";
@@ -1046,7 +1072,11 @@
 
     function getFilteredRecords() {
       const filtered = state.records.filter(r => {
-        if (state.statusFilter !== "전체" && normalizeStatus(r.status) !== normalizeStatus(state.statusFilter)) return false;
+        if (state.statusFilters.length > 0) {
+          const normRec = normalizeStatus(r.status);
+          const matched = state.statusFilters.some(sf => normalizeStatus(sf) === normRec);
+          if (!matched) return false;
+        }
         return matchesBaseFilters(r);
       });
 
@@ -1122,11 +1152,15 @@
 
     function getFilteredOrderRecords() {
       const filtered = state.orderRecords.filter(r => {
-        if (state.orderStatusFilter === "긴급납기") {
-          const theme = getOrderDueTheme(r.due_date, r.shipment_status);
-          if (!["overdue", "dday", "d1"].includes(theme.level)) return false;
-        } else if (state.orderStatusFilter !== "전체" && normalizeStatus(r.shipment_status) !== normalizeStatus(state.orderStatusFilter)) {
-          return false;
+        if (state.orderStatusFilters.length > 0) {
+          const matched = state.orderStatusFilters.some(sf => {
+            if (sf === "긴급납기") {
+              const theme = getOrderDueTheme(r.due_date, r.shipment_status);
+              return ["overdue", "dday", "d1"].includes(theme.level);
+            }
+            return normalizeStatus(r.shipment_status) === normalizeStatus(sf);
+          });
+          if (!matched) return false;
         }
         return matchesOrderBaseFilters(r);
       });
@@ -1256,7 +1290,6 @@
       showToast(`📥 ${rows.length}건 (${format.toUpperCase()}) 다운로드 완료`);
     }
 
-    // 목록 배지 색상 (제작중: 하늘색, 출고대기: 주황색, 출고완료: 초록색, 발주취소/보류: 회색)
     function statusBadge(st) {
       const clean = normalizeStatus(st);
       if (clean === "접수" || clean === "발주접수") return "bg-blue-100 text-blue-700 border border-blue-200";
@@ -1367,28 +1400,29 @@
       const programModCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "프로그램수정대기").length;
       const doneCnt = baseFiltered.filter(r => normalizeStatus(r.status) === "처리완료").length;
 
-      const activeNorm = normalizeStatus(state.statusFilter);
+      const isAllActive = state.statusFilters.length === 0;
+      const isStatusSelected = (st) => state.statusFilters.some(sf => normalizeStatus(sf) === normalizeStatus(st));
 
       return `
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 px-3.5 py-3 mb-3 flex flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap items-center gap-1.5 text-xs sm:text-sm">
-            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "전체" ? "bg-slate-800 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}">
+            <button type="button" onclick="toggleQuickStatusFilter('전체')" class="px-3 py-1.5 rounded-xl font-bold transition ${isAllActive ? "bg-slate-800 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}">
               전체 <b>${totalCnt}</b>건
             </button>
-            <button type="button" onclick="setQuickStatusFilter('접수')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "접수" ? "bg-blue-600 text-white shadow-sm" : "bg-blue-50 text-blue-700 hover:bg-blue-100"}">
-              접수 <b>${receiptCnt}</b>
+            <button type="button" onclick="toggleQuickStatusFilter('접수')" class="px-3 py-1.5 rounded-xl font-bold transition ${isStatusSelected("접수") ? "bg-blue-600 text-white shadow-sm" : "bg-blue-50 text-blue-700 hover:bg-blue-100"}">
+              ${isStatusSelected("접수") ? "✓ " : ""}접수 <b>${receiptCnt}</b>
             </button>
-            <button type="button" onclick="setQuickStatusFilter('부품대기')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "부품대기" ? "bg-rose-600 text-white shadow-sm" : "bg-rose-50 text-rose-700 hover:bg-rose-100"}">
-              부품대기 <b>${partsWaitCnt}</b>
+            <button type="button" onclick="toggleQuickStatusFilter('부품대기')" class="px-3 py-1.5 rounded-xl font-bold transition ${isStatusSelected("부품대기") ? "bg-rose-600 text-white shadow-sm" : "bg-rose-50 text-rose-700 hover:bg-rose-100"}">
+              ${isStatusSelected("부품대기") ? "✓ " : ""}부품대기 <b>${partsWaitCnt}</b>
             </button>
-            <button type="button" onclick="setQuickStatusFilter('타업체 수리 요청')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "타업체수리요청" ? "bg-purple-600 text-white shadow-sm" : "bg-purple-50 text-purple-700 hover:bg-purple-100"}">
-              타업체요청 <b>${externalRepairCnt}</b>
+            <button type="button" onclick="toggleQuickStatusFilter('타업체 수리 요청')" class="px-3 py-1.5 rounded-xl font-bold transition ${isStatusSelected("타업체수리요청") ? "bg-purple-600 text-white shadow-sm" : "bg-purple-50 text-purple-700 hover:bg-purple-100"}">
+              ${isStatusSelected("타업체수리요청") ? "✓ " : ""}타업체요청 <b>${externalRepairCnt}</b>
             </button>
-            <button type="button" onclick="setQuickStatusFilter('프로그램 수정 대기')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "프로그램수정대기" ? "bg-indigo-600 text-white shadow-sm" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}">
-              프로그램수정 <b>${programModCnt}</b>
+            <button type="button" onclick="toggleQuickStatusFilter('프로그램 수정 대기')" class="px-3 py-1.5 rounded-xl font-bold transition ${isStatusSelected("프로그램수정대기") ? "bg-indigo-600 text-white shadow-sm" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}">
+              ${isStatusSelected("프로그램수정대기") ? "✓ " : ""}프로그램수정 <b>${programModCnt}</b>
             </button>
-            <button type="button" onclick="setQuickStatusFilter('처리완료')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "처리완료" ? "bg-emerald-600 text-white shadow-sm" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}">
-              처리완료 <b>${doneCnt}</b>
+            <button type="button" onclick="toggleQuickStatusFilter('처리완료')" class="px-3 py-1.5 rounded-xl font-bold transition ${isStatusSelected("처리완료") ? "bg-emerald-600 text-white shadow-sm" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}">
+              ${isStatusSelected("처리완료") ? "✓ " : ""}처리완료 <b>${doneCnt}</b>
             </button>
           </div>
           <div class="inline-flex items-center gap-1.5 text-[11px] bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full font-semibold">
@@ -1396,8 +1430,11 @@
           </div>
         </div>
 
-        <div class="text-xs text-slate-500 mb-2 px-1 flex justify-between items-center">
-          <div>현재 목록 <b class="text-slate-800">${filtered.length}</b>건 표시 중 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 정렬됩니다)</span></div>
+        <div class="text-xs text-slate-500 mb-2 px-1 flex flex-wrap justify-between items-center gap-1">
+          <div>
+            현재 목록 <b class="text-slate-800">${filtered.length}</b>건 표시 중
+            ${state.statusFilters.length > 0 ? `<span class="text-blue-600 font-semibold ml-1">(${state.statusFilters.join(" + ")} 중복 선택됨 · 다시 누르면 해제)</span>` : `<span class="text-slate-400 ml-1">(상단 상태 버튼 중복 선택 가능)</span>`}
+          </div>
         </div>
 
         <!-- PC 화면: 표(테이블) 뷰 -->
@@ -1535,9 +1572,9 @@
       const totalCnt = baseFiltered.length;
       const urgentCnt = baseFiltered.filter(r => ["overdue", "dday", "d1"].includes(getOrderDueTheme(r.due_date, r.shipment_status).level)).length;
       const statusOpts = getOrderCfg("shipment_status")?.options || ["제작중","출고대기","출고완료","발주취소"];
-      const activeNorm = normalizeStatus(state.orderStatusFilter);
+      const isAllActive = state.orderStatusFilters.length === 0;
+      const isOrderStatusSelected = (st) => state.orderStatusFilters.some(sf => normalizeStatus(sf) === normalizeStatus(st));
 
-      // 상단 필터 버튼 색상 (배지 색상과 동일하게 통일: 제작중=하늘색, 출고대기=주황색, 출고완료=초록색)
       const getChipStyle = (st, isSelected) => {
         const clean = normalizeStatus(st);
         if (clean === "발주접수") return isSelected ? "bg-blue-600 text-white shadow-sm" : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200";
@@ -1552,20 +1589,20 @@
       return `
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 px-3.5 py-3 mb-3 flex flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap items-center gap-1.5 text-xs sm:text-sm">
-            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "전체" ? "bg-slate-800 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}">
+            <button type="button" onclick="toggleQuickStatusFilter('전체')" class="px-3 py-1.5 rounded-xl font-bold transition ${isAllActive ? "bg-slate-800 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}">
               전체 <b>${totalCnt}</b>건
             </button>
             ${urgentCnt > 0 ? `
-              <button type="button" onclick="setQuickStatusFilter('긴급납기')" class="px-3 py-1.5 rounded-xl font-extrabold transition border ${state.orderStatusFilter === "긴급납기" ? "bg-amber-500 text-white border-amber-600 shadow-sm" : "bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100"}">
-                ⏰ 납기임박(D-1/지연) <b>${urgentCnt}</b>건
+              <button type="button" onclick="toggleQuickStatusFilter('긴급납기')" class="px-3 py-1.5 rounded-xl font-extrabold transition border ${isOrderStatusSelected("긴급납기") ? "bg-amber-500 text-white border-amber-600 shadow-sm" : "bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100"}">
+                ${isOrderStatusSelected("긴급납기") ? "✓ " : ""}⏰ 납기임박(D-1/지연) <b>${urgentCnt}</b>건
               </button>
             ` : ""}
             ${statusOpts.map(st => {
               const cnt = baseFiltered.filter(r => normalizeStatus(r.shipment_status) === normalizeStatus(st)).length;
-              const isSelected = activeNorm === normalizeStatus(st);
+              const isSelected = isOrderStatusSelected(st);
               return `
-                <button type="button" onclick="setQuickStatusFilter('${st.replace(/'/g, "\\'")}')" class="px-3 py-1.5 rounded-xl font-bold transition ${getChipStyle(st, isSelected)}">
-                  ${st} <b>${cnt}</b>
+                <button type="button" onclick="toggleQuickStatusFilter('${st.replace(/'/g, "\\'")}')" class="px-3 py-1.5 rounded-xl font-bold transition ${getChipStyle(st, isSelected)}">
+                  ${isSelected ? "✓ " : ""}${st} <b>${cnt}</b>
                 </button>`;
             }).join("")}
           </div>
@@ -1575,7 +1612,10 @@
         </div>
 
         <div class="text-xs text-slate-500 mb-2 px-1 flex flex-wrap justify-between items-center gap-1">
-          <div>현재 발주 목록 <b class="text-slate-800">${filtered.length}</b>건 표시 중</div>
+          <div>
+            현재 발주 목록 <b class="text-slate-800">${filtered.length}</b>건 표시 중
+            ${state.orderStatusFilters.length > 0 ? `<span class="text-indigo-600 font-semibold ml-1">(${state.orderStatusFilters.join(" + ")} 중복 선택됨 · 다시 누르면 해제)</span>` : ""}
+          </div>
           <div class="flex items-center gap-2 text-[11px]">
             <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-xs bg-amber-300 border border-amber-500"></span>D-1 내일납기</span>
             <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-xs bg-orange-300 border border-orange-500"></span>오늘납기</span>
@@ -1810,6 +1850,9 @@
         const hasOrderDate = state.orderDateRangeMode
           ? Boolean(state.orderDateFrom || state.orderDateTo)
           : Boolean(state.orderDateSingle);
+        const ordDropdownStatusVal = state.orderStatusFilters.length === 0
+          ? "전체"
+          : (state.orderStatusFilters.length === 1 ? state.orderStatusFilters[0] : "__MULTI__");
 
         mainHtml = `
           <main class="max-w-7xl mx-auto p-3.5 sm:p-4 pb-24">
@@ -1820,7 +1863,7 @@
                 <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white px-4 py-2 rounded-xl text-sm font-extrabold shadow-sm">+ 새 발주 등록</button>
               </div>
 
-              <!-- 날짜 검색 바 (기본값: 하루 지정 / 버튼 클릭 시 언제~언제 기간 지정) -->
+              <!-- 날짜 검색 바 -->
               <div class="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200/70 text-sm">
                 <select onchange="state.orderDateFilterKey=this.value;render()" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm bg-white font-semibold text-slate-700">
                   <option value="receipt_date" ${state.orderDateFilterKey==="receipt_date"?"selected":""}>날짜: 접수일</option>
@@ -1844,10 +1887,11 @@
 
               <!-- 항목 필터 바 -->
               <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
-                <select onchange="state.orderStatusFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
-                  <option value="전체" ${state.orderStatusFilter==="전체"?"selected":""}>출고 현황: 전체</option>
-                  <option value="긴급납기" ${state.orderStatusFilter==="긴급납기"?"selected":""}>⏰ 납기임박(D-1/지연)</option>
-                  ${ordStatusOpts.map(o => `<option value="${o}" ${state.orderStatusFilter===o?"selected":""}>${o}</option>`).join("")}
+                <select onchange="if(this.value!=='__MULTI__') setSingleStatusDropdown(this.value)" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${ordDropdownStatusVal==="전체"?"selected":""}>출고 현황: 전체</option>
+                  ${ordDropdownStatusVal==="__MULTI__" ? `<option value="__MULTI__" selected>출고 현황: ${state.orderStatusFilters.length}개 선택됨</option>` : ""}
+                  <option value="긴급납기" ${ordDropdownStatusVal==="긴급납기"?"selected":""}>⏰ 납기임박(D-1/지연)</option>
+                  ${ordStatusOpts.map(o => `<option value="${o}" ${ordDropdownStatusVal===o?"selected":""}>${o}</option>`).join("")}
                 </select>
                 <select onchange="state.orderModelFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.orderModelFilter==="전체"?"selected":""}>모델명: 전체</option>
@@ -1895,6 +1939,9 @@
         const visitorOpts = Array.from(visitorSet);
 
         const currentSortVal = `${state.sortKey}:${state.sortDir}`;
+        const asDropdownStatusVal = state.statusFilters.length === 0
+          ? "전체"
+          : (state.statusFilters.length === 1 ? state.statusFilters[0] : "__MULTI__");
 
         mainHtml = `
           <main class="max-w-7xl mx-auto p-3.5 sm:p-4 pb-24">
@@ -1923,9 +1970,10 @@
 
               <!-- 항목 필터 바 -->
               <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
-                <select onchange="state.statusFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
-                  <option value="전체" ${state.statusFilter==="전체"?"selected":""}>상태: 전체</option>
-                  ${statusOpts.map(o => `<option value="${o}" ${state.statusFilter===o?"selected":""}>${o}</option>`).join("")}
+                <select onchange="if(this.value!=='__MULTI__') setSingleStatusDropdown(this.value)" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${asDropdownStatusVal==="전체"?"selected":""}>상태: 전체</option>
+                  ${asDropdownStatusVal==="__MULTI__" ? `<option value="__MULTI__" selected>상태: ${state.statusFilters.length}개 선택됨</option>` : ""}
+                  ${statusOpts.map(o => `<option value="${o}" ${asDropdownStatusVal===o?"selected":""}>${o}</option>`).join("")}
                 </select>
                 <select onchange="state.sidoFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.sidoFilter==="전체"?"selected":""}>지역: 전체</option>
@@ -2234,7 +2282,7 @@
         </div>`;
     }
 
-    // KOASIS 발주 대장 입력/수정 모달 (발주자 기본값은 '선택')
+    // KOASIS 발주 대장 입력/수정 모달
     function renderOrderFormModal() {
       const r = state.editingRecord || {};
       const today = new Date().toISOString().slice(0, 10);
