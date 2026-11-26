@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <title>AS 접수 관리 대장</title>
+  <title>KOASIS 통합 관리 대장</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -29,8 +29,10 @@
     let realtimeChannel = null;
 
     let state = {
+      activeTab: "as", // "as" (AS 접수 대장) | "order" (KOASIS 발주 대장)
       user: null,
       username: "",
+      // AS 접수 대장 상태
       records: [],
       configs: [],
       search: "",
@@ -41,11 +43,25 @@
       dateFilterKey: "receipt_date",
       dateFrom: "",
       dateTo: "",
+      sortKey: "created_at",
+      sortDir: "desc",
+      // KOASIS 발주 대장 상태
+      orderRecords: [],
+      orderConfigs: [],
+      orderSearch: "",
+      orderStatusFilter: "전체",
+      orderModelFilter: "전체",
+      orderOrdererFilter: "전체",
+      orderDestTypeFilter: "전체",
+      orderDateFilterKey: "receipt_date",
+      orderDateFrom: "",
+      orderDateTo: "",
+      orderSortKey: "created_at",
+      orderSortDir: "desc",
+      // 공통 모달 상태
       exportDateKey: "receipt_date",
       exportDateFrom: "",
       exportDateTo: "",
-      sortKey: "created_at",
-      sortDir: "desc",
       modalOpen: false,
       configModalOpen: false,
       pwModalOpen: false,
@@ -62,10 +78,17 @@
       "repair_note", "replaced_parts", "replacement_type", "dealer_name", "dealer_phone"
     ];
 
+    const ORDER_SYSTEM_KEYS = [
+      "client_name", "shipment_status", "receipt_date", "due_date",
+      "model_name", "orderer", "pump_change", "option_add",
+      "serial_number", "dest_type", "dest_address", "dest_phone", "remarks"
+    ];
+
     const REQUIRED_KEYS = ["customer_name", "receipt_date", "phone", "model_name"];
-    const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note"];
-    const DATE_KEYS = ["receipt_date", "visit_date", "completed_date", "created_at"];
-    const PHONE_KEYS = ["phone", "dealer_phone"];
+    const ORDER_REQUIRED_KEYS = ["client_name", "receipt_date", "model_name"];
+    const TEXTAREA_KEYS = ["symptom_detail", "phone_action", "special_note", "repair_note", "remarks"];
+    const DATE_KEYS = ["receipt_date", "visit_date", "completed_date", "due_date", "created_at"];
+    const PHONE_KEYS = ["phone", "dealer_phone", "dest_phone"];
     const NUMBER_KEYS = ["repair_cost", "parts_cost", "vat_cost", "total_cost"];
     const URGENCY_RANK = {
       "매우긴급": 4, "최긴급": 4,
@@ -117,6 +140,31 @@
       return String(val).slice(0, 10);
     }
 
+    // 접수일(발주일) ~ 납기일 소요 예정일(일수) 계산
+    function calcLeadDays(receiptDate, dueDate) {
+      if (!receiptDate || !dueDate) return null;
+      const d1 = new Date(receiptDate + "T00:00:00");
+      const d2 = new Date(dueDate + "T00:00:00");
+      if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return null;
+      return Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+    }
+
+    function formatLeadDaysText(receiptDate, dueDate) {
+      const diff = calcLeadDays(receiptDate, dueDate);
+      if (diff === null) return "-";
+      if (diff === 0) return "당일 (0일)";
+      return `${diff}일`;
+    }
+
+    function updateModalLeadTime() {
+      const form = document.getElementById("orderRecordForm");
+      const el = document.getElementById("modalLeadTimeDisplay");
+      if (!form || !el) return;
+      const rDate = form.receipt_date?.value || "";
+      const dDate = form.due_date?.value || "";
+      el.innerText = formatLeadDaysText(rDate, dDate);
+    }
+
     function showToast(msg) {
       const t = document.getElementById("toast");
       if (!t) return;
@@ -146,6 +194,12 @@
     }
 
     function copyModalAddress() {
+      if (state.activeTab === "order") {
+        const form = document.getElementById("orderRecordForm");
+        if (!form) return;
+        copyText(form.dest_address?.value || "");
+        return;
+      }
       const form = document.getElementById("asRecordForm");
       if (!form) return;
       const sido = form.region_sido?.value || "";
@@ -154,7 +208,30 @@
       copyText(`${sido} ${sigun} ${detail}`);
     }
 
+    function switchTab(tab) {
+      if (state.activeTab === tab) return;
+      state.activeTab = tab;
+      state.modalOpen = false;
+      state.configModalOpen = false;
+      state.exportModalOpen = false;
+      state.editingRecord = null;
+      render();
+    }
+
     function hasAnyActiveFilter() {
+      if (state.activeTab === "order") {
+        return Boolean(
+          state.orderSearch ||
+          state.orderStatusFilter !== "전체" ||
+          state.orderModelFilter !== "전체" ||
+          state.orderOrdererFilter !== "전체" ||
+          state.orderDestTypeFilter !== "전체" ||
+          state.orderDateFrom ||
+          state.orderDateTo ||
+          state.orderSortKey !== "created_at" ||
+          state.orderSortDir !== "desc"
+        );
+      }
       return Boolean(
         state.search ||
         state.statusFilter !== "전체" ||
@@ -169,7 +246,11 @@
     }
 
     function handleSearchInput(val) {
-      state.search = val;
+      if (state.activeTab === "order") {
+        state.orderSearch = val;
+      } else {
+        state.search = val;
+      }
       const resetBtn = document.getElementById("resetFilterBtn");
       if (resetBtn) {
         resetBtn.style.display = hasAnyActiveFilter() ? "inline-flex" : "none";
@@ -178,6 +259,17 @@
     }
 
     function setQuickStatusFilter(st) {
+      if (state.activeTab === "order") {
+        if (st === "전체") {
+          state.orderStatusFilter = "전체";
+        } else {
+          const opts = getOrderCfg("shipment_status")?.options || [];
+          const matched = opts.find(o => normalizeStatus(o) === normalizeStatus(st));
+          state.orderStatusFilter = matched || st;
+        }
+        render();
+        return;
+      }
       if (st === "전체") {
         state.statusFilter = "전체";
       } else {
@@ -189,6 +281,20 @@
     }
 
     function resetFilters() {
+      if (state.activeTab === "order") {
+        state.orderSearch = "";
+        state.orderStatusFilter = "전체";
+        state.orderModelFilter = "전체";
+        state.orderOrdererFilter = "전체";
+        state.orderDestTypeFilter = "전체";
+        state.orderDateFilterKey = "receipt_date";
+        state.orderDateFrom = "";
+        state.orderDateTo = "";
+        state.orderSortKey = "created_at";
+        state.orderSortDir = "desc";
+        render();
+        return;
+      }
       state.search = "";
       state.statusFilter = "전체";
       state.sidoFilter = "전체";
@@ -203,6 +309,16 @@
     }
 
     function toggleSort(key) {
+      if (state.activeTab === "order") {
+        if (state.orderSortKey === key) {
+          state.orderSortDir = state.orderSortDir === "asc" ? "desc" : "asc";
+        } else {
+          state.orderSortKey = key;
+          state.orderSortDir = (DATE_KEYS.includes(key) || key === "lead_days") ? "desc" : "asc";
+        }
+        renderRecordsArea();
+        return;
+      }
       if (state.sortKey === key) {
         state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
       } else {
@@ -214,8 +330,13 @@
 
     function setMobileSort(val) {
       const [key, dir] = val.split(":");
-      state.sortKey = key;
-      state.sortDir = dir;
+      if (state.activeTab === "order") {
+        state.orderSortKey = key;
+        state.orderSortDir = dir;
+      } else {
+        state.sortKey = key;
+        state.sortDir = dir;
+      }
       renderRecordsArea();
     }
 
@@ -224,21 +345,32 @@
         sb.removeChannel(realtimeChannel);
       }
       realtimeChannel = sb
-        .channel("as_realtime_sync")
+        .channel("koasis_realtime_sync")
         .on("postgres_changes", { event: "*", schema: "public", table: "as_records" }, async () => {
           await loadAllData(true);
           if (state.modalOpen || state.configModalOpen || state.exportModalOpen || state.pwModalOpen) {
             renderRecordsArea();
-          } else {
+          } else if (state.activeTab === "as") {
             render();
           }
-          showToast("🔔 다른 팀원의 변경사항이 실시간 반영되었습니다");
+          showToast("🔔 AS 접수 대장 변경사항이 실시간 반영되었습니다");
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "order_records" }, async () => {
+          await loadAllData(true);
+          if (state.modalOpen || state.configModalOpen || state.exportModalOpen || state.pwModalOpen) {
+            renderRecordsArea();
+          } else if (state.activeTab === "order") {
+            render();
+          }
+          showToast("🔔 KOASIS 발주 대장 변경사항이 실시간 반영되었습니다");
         })
         .on("postgres_changes", { event: "*", schema: "public", table: "field_configs" }, async () => {
           await loadAllData(true);
-          if (!state.modalOpen && !state.configModalOpen) {
-            render();
-          }
+          if (!state.modalOpen && !state.configModalOpen && state.activeTab === "as") render();
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "order_field_configs" }, async () => {
+          await loadAllData(true);
+          if (!state.modalOpen && !state.configModalOpen && state.activeTab === "order") render();
         })
         .subscribe();
     }
@@ -278,12 +410,16 @@
     }
 
     async function loadAllData(silent = false) {
-      const [recRes, cfgRes] = await Promise.all([
+      const [recRes, cfgRes, ordRes, ordCfgRes] = await Promise.all([
         sb.from("as_records").select("*").order("created_at", { ascending: false }),
-        sb.from("field_configs").select("*").order("sort_order", { ascending: true })
+        sb.from("field_configs").select("*").order("sort_order", { ascending: true }),
+        sb.from("order_records").select("*").order("created_at", { ascending: false }),
+        sb.from("order_field_configs").select("*").order("sort_order", { ascending: true })
       ]);
       if (recRes.data) state.records = recRes.data;
       if (cfgRes.data) state.configs = cfgRes.data;
+      if (ordRes.data) state.orderRecords = ordRes.data;
+      if (ordCfgRes.data) state.orderConfigs = ordCfgRes.data;
     }
 
     function getSavedCredentials() {
@@ -360,9 +496,15 @@
     }
 
     function openExportModal() {
-      state.exportDateKey = state.dateFilterKey || "receipt_date";
-      state.exportDateFrom = state.dateFrom || "";
-      state.exportDateTo = state.dateTo || "";
+      if (state.activeTab === "order") {
+        state.exportDateKey = state.orderDateFilterKey || "receipt_date";
+        state.exportDateFrom = state.orderDateFrom || "";
+        state.exportDateTo = state.orderDateTo || "";
+      } else {
+        state.exportDateKey = state.dateFilterKey || "receipt_date";
+        state.exportDateFrom = state.dateFrom || "";
+        state.exportDateTo = state.dateTo || "";
+      }
       state.exportModalOpen = true;
       render();
     }
@@ -390,6 +532,7 @@
       render();
     }
 
+    // AS 접수 대장 저장
     async function saveRecord(e) {
       e.preventDefault();
       const f = e.target;
@@ -462,9 +605,69 @@
       showToast("✅ 저장되었습니다");
     }
 
+    // KOASIS 발주 대장 저장
+    async function saveOrderRecord(e) {
+      e.preventDefault();
+      const f = e.target;
+
+      const clientName = f.client_name?.value.trim() || "";
+      const receiptDate = f.receipt_date?.value || "";
+      const modelName = f.model_name?.value.trim() || "";
+
+      const missing = [];
+      if (!clientName) missing.push("발주처");
+      if (!receiptDate) missing.push("접수일");
+      if (!modelName) missing.push("모델명");
+
+      if (missing.length > 0) {
+        return alert(`필수 항목을 모두 입력해야 저장할 수 있습니다.\n(미입력 항목: ${missing.join(", ")})`);
+      }
+
+      const customFields = {};
+      state.orderConfigs.filter(c => !c.is_system).forEach(c => {
+        customFields[c.field_key] = f["custom_" + c.field_key]?.value || "";
+      });
+
+      const payload = {
+        client_name: clientName,
+        shipment_status: f.shipment_status?.value || "발주접수",
+        receipt_date: receiptDate,
+        due_date: f.due_date?.value || null,
+        model_name: modelName,
+        orderer: f.orderer?.value.trim() || "",
+        pump_change: f.pump_change?.value || "",
+        option_add: f.option_add?.value || "",
+        serial_number: f.serial_number?.value.trim() || "",
+        dest_type: f.dest_type?.value || "",
+        dest_address: f.dest_address?.value.trim() || "",
+        dest_phone: formatKoreanPhone(f.dest_phone?.value.trim() || ""),
+        remarks: f.remarks?.value.trim() || "",
+        custom_fields: customFields,
+        updated_by: state.username,
+        updated_at: new Date().toISOString()
+      };
+
+      if (state.editingRecord) {
+        const { error } = await sb.from("order_records").update(payload).eq("id", state.editingRecord.id);
+        if (error) return alert("수정 오류: " + error.message);
+      } else {
+        payload.created_by = state.username;
+        const { error } = await sb.from("order_records").insert([payload]);
+        if (error) return alert("등록 오류: " + error.message);
+      }
+
+      state.modalOpen = false;
+      state.editingRecord = null;
+      await loadAllData();
+      render();
+      showToast("✅ 발주 내역이 저장되었습니다");
+    }
+
     async function deleteRecord(id) {
-      if (!confirm("정말 이 AS 내역을 삭제할까요?")) return;
-      await sb.from("as_records").delete().eq("id", id);
+      const table = state.activeTab === "order" ? "order_records" : "as_records";
+      const label = state.activeTab === "order" ? "발주 내역" : "AS 내역";
+      if (!confirm(`정말 이 ${label}을 삭제할까요?`)) return;
+      await sb.from(table).delete().eq("id", id);
       state.modalOpen = false;
       await loadAllData();
       render();
@@ -478,10 +681,14 @@
       const optsRaw = document.getElementById("newFieldOpts").value.trim();
       if (!label) return alert("항목 이름을 입력하세요.");
 
+      const isOrder = state.activeTab === "order";
+      const cfgTable = isOrder ? "order_field_configs" : "field_configs";
+      const cfgList = isOrder ? state.orderConfigs : state.configs;
+
       const key = "field_" + Date.now();
       const options = type === "select" ? optsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
-      const { error } = await sb.from("field_configs").insert([{
-        field_key: key, field_label: label, field_type: type, options, is_system: false, sort_order: state.configs.length + 1
+      const { error } = await sb.from(cfgTable).insert([{
+        field_key: key, field_label: label, field_type: type, options, is_system: false, sort_order: cfgList.length + 1
       }]);
       if (error) return alert("항목 추가 오류: " + error.message);
       await loadAllData();
@@ -489,6 +696,7 @@
     }
 
     async function saveFieldConfig(id, key) {
+      const cfgTable = state.activeTab === "order" ? "order_field_configs" : "field_configs";
       const typeEl = document.getElementById("type_" + id);
       const optsEl = document.getElementById("opt_" + id);
       let newType = typeEl ? typeEl.value : "text";
@@ -501,7 +709,7 @@
         ? optsEl.value.split(",").map(s => s.trim()).filter(Boolean)
         : [];
 
-      const { error } = await sb.from("field_configs").update({ field_type: newType, options }).eq("id", id);
+      const { error } = await sb.from(cfgTable).update({ field_type: newType, options }).eq("id", id);
       if (error) return alert("저장 오류: " + error.message);
       await loadAllData();
       alert("설정이 저장되었습니다.");
@@ -509,8 +717,9 @@
     }
 
     async function deleteCustomField(id) {
+      const cfgTable = state.activeTab === "order" ? "order_field_configs" : "field_configs";
       if (!confirm("이 추가 항목을 삭제할까요?")) return;
-      await sb.from("field_configs").delete().eq("id", id);
+      await sb.from(cfgTable).delete().eq("id", id);
       await loadAllData();
       render();
     }
@@ -528,6 +737,7 @@
       return sum;
     }
 
+    // AS 접수 대장 필터
     function matchesBaseFilters(r) {
       if (state.sidoFilter !== "전체" && r.region_sido !== state.sidoFilter) return false;
       if (state.modelFilter !== "전체" && (r.model_name || "") !== state.modelFilter) return false;
@@ -588,8 +798,59 @@
       });
     }
 
+    // KOASIS 발주 대장 필터
+    function matchesOrderBaseFilters(r) {
+      if (state.orderModelFilter !== "전체" && (r.model_name || "") !== state.orderModelFilter) return false;
+      if (state.orderOrdererFilter !== "전체" && (r.orderer || "") !== state.orderOrdererFilter) return false;
+      if (state.orderDestTypeFilter !== "전체" && (r.dest_type || "") !== state.orderDestTypeFilter) return false;
+
+      if (state.orderDateFrom || state.orderDateTo) {
+        const dVal = getLocalDateStr(r, state.orderDateFilterKey);
+        if (!dVal) return false;
+        if (state.orderDateFrom && dVal < state.orderDateFrom) return false;
+        if (state.orderDateTo && dVal > state.orderDateTo) return false;
+      }
+
+      if (state.orderSearch) {
+        const q = state.orderSearch.toLowerCase().trim();
+        const qDigits = q.replace(/-/g, "");
+        const target = `${r.client_name} ${r.shipment_status} ${r.model_name} ${r.orderer} ${r.pump_change} ${r.option_add} ${r.serial_number} ${r.dest_type} ${r.dest_address} ${r.dest_phone} ${r.remarks} ${r.created_by}`.toLowerCase();
+        const phoneDigits = `${r.dest_phone || ""}`.replace(/-/g, "");
+        if (!target.includes(q) && !(qDigits && phoneDigits.includes(qDigits))) return false;
+      }
+      return true;
+    }
+
+    function getFilteredOrderRecords() {
+      const filtered = state.orderRecords.filter(r => {
+        if (state.orderStatusFilter !== "전체" && normalizeStatus(r.shipment_status) !== normalizeStatus(state.orderStatusFilter)) return false;
+        return matchesOrderBaseFilters(r);
+      });
+
+      const key = state.orderSortKey;
+      const mult = state.orderSortDir === "asc" ? 1 : -1;
+
+      return [...filtered].sort((a, b) => {
+        if (key === "lead_days") {
+          const da = calcLeadDays(a.receipt_date, a.due_date);
+          const db = calcLeadDays(b.receipt_date, b.due_date);
+          if (da === null && db === null) return 0;
+          if (da === null) return 1;
+          if (db === null) return -1;
+          return (da - db) * mult;
+        }
+        const va = String(a[key] ?? "").trim();
+        const vb = String(b[key] ?? "").trim();
+        if (!va && !vb) return 0;
+        if (!va) return 1;
+        if (!vb) return -1;
+        return va.localeCompare(vb, "ko") * mult;
+      });
+    }
+
     function getExportTargetRecords() {
-      const baseRows = getFilteredRecords();
+      const isOrder = state.activeTab === "order";
+      const baseRows = isOrder ? getFilteredOrderRecords() : getFilteredRecords();
       if (!state.exportDateFrom && !state.exportDateTo) return baseRows;
       return baseRows.filter(r => {
         const dVal = getLocalDateStr(r, state.exportDateKey);
@@ -601,34 +862,61 @@
     }
 
     function exportExcel(format) {
+      const isOrder = state.activeTab === "order";
       const rows = getExportTargetRecords();
       if (rows.length === 0) return alert("선택한 기간에 해당하는 내역이 없습니다.");
 
-      const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
-      const customCols = state.configs.filter(c => !c.is_system);
+      let headers = [];
+      let dataRows = [];
+      const baseFileName = isOrder ? "KOASIS발주대장" : "AS접수대장";
 
-      const headers = [
-        ...sysCols.map(c => c.field_label),
-        ...customCols.map(c => c.field_label),
-        "수리비구분", "출장비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
-      ];
+      if (isOrder) {
+        const sysCols = ORDER_SYSTEM_KEYS.map(k => getOrderCfg(k)).filter(Boolean);
+        const customCols = state.orderConfigs.filter(c => !c.is_system);
 
-      const dataRows = rows.map(r => {
-        const pt = r.payment_type || "";
-        const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
-        return [
+        headers = [
+          ...sysCols.map(c => c.field_label),
+          "소요 예정일",
+          ...customCols.map(c => c.field_label),
+          "생성일시", "생성자", "최종 편집 일시", "최종 편집자"
+        ];
+
+        dataRows = rows.map(r => [
           ...sysCols.map(c => r[c.field_key] ?? ""),
+          formatLeadDaysText(r.receipt_date, r.due_date),
           ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
-          pt,
-          r.repair_cost || 0,
-          r.parts_cost || 0,
-          vat,
-          r.total_cost || 0,
           formatDateTime(r.created_at),
           r.created_by || "",
+          r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "",
           r.updated_by || ""
+        ]);
+      } else {
+        const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
+        const customCols = state.configs.filter(c => !c.is_system);
+
+        headers = [
+          ...sysCols.map(c => c.field_label),
+          ...customCols.map(c => c.field_label),
+          "수리비구분", "수리비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
         ];
-      });
+
+        dataRows = rows.map(r => {
+          const pt = r.payment_type || "";
+          const vat = getVatAmount(pt, r.repair_cost, r.parts_cost);
+          return [
+            ...sysCols.map(c => r[c.field_key] ?? ""),
+            ...customCols.map(c => (r.custom_fields && r.custom_fields[c.field_key]) || ""),
+            pt,
+            r.repair_cost || 0,
+            r.parts_cost || 0,
+            vat,
+            r.total_cost || 0,
+            formatDateTime(r.created_at),
+            r.created_by || "",
+            r.updated_by || ""
+          ];
+        });
+      }
 
       const rangeSuffix = (state.exportDateFrom || state.exportDateTo)
         ? `_${state.exportDateFrom || "처음"}~${state.exportDateTo || "현재"}`
@@ -637,12 +925,12 @@
       if (format === "xls" || format === "xlsx") {
         const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "AS접수대장");
+        XLSX.utils.book_append_sheet(wb, ws, baseFileName);
 
         if (format === "xls") {
-          XLSX.writeFile(wb, `AS접수대장${rangeSuffix}.xls`, { bookType: "biff8" });
+          XLSX.writeFile(wb, `${baseFileName}${rangeSuffix}.xls`, { bookType: "biff8" });
         } else {
-          XLSX.writeFile(wb, `AS접수대장${rangeSuffix}.xlsx`, { bookType: "xlsx" });
+          XLSX.writeFile(wb, `${baseFileName}${rangeSuffix}.xlsx`, { bookType: "xlsx" });
         }
       } else {
         const csvLines = [
@@ -653,7 +941,7 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `AS접수대장${rangeSuffix}.csv`;
+        a.download = `${baseFileName}${rangeSuffix}.csv`;
         a.click();
       }
 
@@ -664,12 +952,12 @@
 
     function statusBadge(st) {
       const clean = normalizeStatus(st);
-      if (clean === "접수") return "bg-blue-100 text-blue-700";
-      if (clean === "부품대기") return "bg-red-100 text-red-700";
+      if (clean === "접수" || clean === "발주접수") return "bg-blue-100 text-blue-700";
+      if (clean === "부품대기" || clean === "자재준비") return "bg-red-100 text-red-700";
       if (clean === "타업체수리요청") return "bg-purple-100 text-purple-700";
-      if (clean === "프로그램수정대기") return "bg-indigo-100 text-indigo-700";
-      if (clean === "처리완료") return "bg-green-100 text-green-700";
-      if (clean === "처리중" || clean === "대기중") return "bg-yellow-100 text-yellow-800";
+      if (clean === "프로그램수정대기" || clean === "출고대기") return "bg-indigo-100 text-indigo-700";
+      if (clean === "처리완료" || clean === "출고완료") return "bg-green-100 text-green-700";
+      if (clean === "처리중" || clean === "대기중" || clean === "생산중") return "bg-yellow-100 text-yellow-800";
       if (clean === "보류") return "bg-gray-200 text-gray-700";
       return "bg-purple-100 text-purple-700";
     }
@@ -708,9 +996,9 @@
         } else if (payType === "무상") {
           subEl.innerText = `(내부 발생비용 ${(r+p).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
         } else if (payType === "현금") {
-          subEl.innerText = `(출장비 + 부품비 / 부가세 0원)`;
+          subEl.innerText = `(수리비 + 부품비 / 부가세 0원)`;
         } else {
-          subEl.innerText = `(출장비 + 부품비 / 수리비 구분 미선택)`;
+          subEl.innerText = `(수리비 + 부품비 / 수리비 구분 미선택)`;
         }
       }
     }
@@ -719,10 +1007,16 @@
       return state.configs.find(c => c.field_key === key);
     }
 
+    function getOrderCfg(key) {
+      return state.orderConfigs.find(c => c.field_key === key);
+    }
+
     function renderSortTh(key, label, alignRight = false) {
-      const active = state.sortKey === key;
+      const curKey = state.activeTab === "order" ? state.orderSortKey : state.sortKey;
+      const curDir = state.activeTab === "order" ? state.orderSortDir : state.sortDir;
+      const active = curKey === key;
       const icon = active
-        ? (state.sortDir === "asc" ? `<span class="text-blue-600 ml-1">▲</span>` : `<span class="text-blue-600 ml-1">▼</span>`)
+        ? (curDir === "asc" ? `<span class="text-blue-600 ml-1">▲</span>` : `<span class="text-blue-600 ml-1">▼</span>`)
         : `<span class="text-gray-300 ml-1">⇅</span>`;
       return `
         <th onclick="toggleSort('${key}')" class="p-3 cursor-pointer select-none hover:bg-gray-100 transition ${alignRight ? "text-right" : ""} ${active ? "text-blue-700 bg-blue-50/50" : ""}">
@@ -730,6 +1024,7 @@
         </th>`;
     }
 
+    // AS 접수 대장 목록 렌더링
     function buildRecordsHtml() {
       const baseFiltered = state.records.filter(matchesBaseFilters);
       const filtered = getFilteredRecords();
@@ -744,7 +1039,6 @@
       const activeNorm = normalizeStatus(state.statusFilter);
 
       return `
-        <!-- 상단 요약 현황판 (클릭 시 상태 바로 필터) -->
         <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-3.5 py-2.5 mb-3 flex flex-wrap items-center justify-between gap-2">
           <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
             <button type="button" onclick="setQuickStatusFilter('전체')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "전체" ? "bg-gray-800 text-white shadow-xs" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}">
@@ -794,7 +1088,7 @@
                 ${renderSortTh("model_name", "모델(기대번호)")}
                 ${renderSortTh("symptom_detail", "접수시 증상")}
                 ${renderSortTh("payment_type", "구분")}
-                ${renderSortTh("repair_cost", "출장비", true)}
+                ${renderSortTh("repair_cost", "수리비", true)}
                 ${renderSortTh("parts_cost", "부품비", true)}
                 ${renderSortTh("vat_cost", "부가세", true)}
                 ${renderSortTh("total_cost", "합계금액", true)}
@@ -837,7 +1131,7 @@
           </table>
         </div>
 
-        <!-- 모바일 화면: 한 손 조작 카드 뷰 -->
+        <!-- 모바일 화면: 카드 뷰 -->
         <div class="md:hidden space-y-3">
           ${filtered.map(r => {
             const pt = r.payment_type || "";
@@ -887,10 +1181,164 @@
       `;
     }
 
+    // KOASIS 발주 대장 목록 렌더링
+    function buildOrderRecordsHtml() {
+      const baseFiltered = state.orderRecords.filter(matchesOrderBaseFilters);
+      const filtered = getFilteredOrderRecords();
+
+      const totalCnt = baseFiltered.length;
+      const statusOpts = getOrderCfg("shipment_status")?.options || ["발주접수","자재준비","생산중","출고대기","출고완료","보류"];
+      const activeNorm = normalizeStatus(state.orderStatusFilter);
+
+      const getChipStyle = (st, isSelected) => {
+        const clean = normalizeStatus(st);
+        if (clean === "발주접수") return isSelected ? "bg-blue-600 text-white shadow-xs" : "bg-blue-50 text-blue-700 hover:bg-blue-100";
+        if (clean === "자재준비") return isSelected ? "bg-red-600 text-white shadow-xs" : "bg-red-50 text-red-700 hover:bg-red-100";
+        if (clean === "생산중") return isSelected ? "bg-amber-600 text-white shadow-xs" : "bg-amber-50 text-amber-800 hover:bg-amber-100";
+        if (clean === "출고대기") return isSelected ? "bg-indigo-600 text-white shadow-xs" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100";
+        if (clean === "출고완료") return isSelected ? "bg-green-600 text-white shadow-xs" : "bg-green-50 text-green-700 hover:bg-green-100";
+        return isSelected ? "bg-gray-700 text-white shadow-xs" : "bg-gray-100 text-gray-700 hover:bg-gray-200";
+      };
+
+      return `
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-3.5 py-2.5 mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
+            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "전체" ? "bg-gray-800 text-white shadow-xs" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}">
+              전체 <b>${totalCnt}</b>건
+            </button>
+            ${statusOpts.map(st => {
+              const cnt = baseFiltered.filter(r => normalizeStatus(r.shipment_status) === normalizeStatus(st)).length;
+              const isSelected = activeNorm === normalizeStatus(st);
+              return `
+                <span class="text-gray-300">/</span>
+                <button type="button" onclick="setQuickStatusFilter('${st.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg font-semibold transition ${getChipStyle(st, isSelected)}">
+                  ${st} <b>${cnt}</b>건
+                </button>`;
+            }).join("")}
+          </div>
+          <div class="text-[11px] text-emerald-600 font-medium">● 실시간 동기화 연결됨</div>
+        </div>
+
+        <div class="text-xs text-gray-500 mb-2 px-1 flex justify-between items-center">
+          <div>현재 발주 목록 <b>${filtered.length}</b>건 표시 중 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
+        </div>
+
+        <!-- PC 화면: 발주 대장 테이블 뷰 -->
+        <div class="hidden md:block bg-white rounded-xl shadow-sm overflow-x-auto">
+          <table class="w-full text-sm text-left whitespace-nowrap">
+            <thead class="bg-gray-50 border-b text-gray-600">
+              <tr>
+                ${renderSortTh("shipment_status", "출고 현황")}
+                ${renderSortTh("client_name", "발주처")}
+                ${renderSortTh("model_name", "모델명")}
+                ${renderSortTh("serial_number", "기대번호")}
+                ${renderSortTh("receipt_date", "접수일")}
+                ${renderSortTh("due_date", "납기일")}
+                ${renderSortTh("lead_days", "소요 예정일")}
+                ${renderSortTh("orderer", "발주자")}
+                ${renderSortTh("pump_change", "펌프 변경")}
+                ${renderSortTh("option_add", "옵션 추가")}
+                ${renderSortTh("dest_type", "출고지 유형")}
+                ${renderSortTh("dest_address", "출고지 주소")}
+                ${renderSortTh("dest_phone", "출고지 전화번호")}
+                ${renderSortTh("remarks", "비고")}
+                ${renderSortTh("created_at", "생성일시 / 생성자")}
+                ${renderSortTh("updated_at", "최종 편집 일시 / 편집자")}
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              ${filtered.map(r => {
+                const st = r.shipment_status || "발주접수";
+                const leadText = formatLeadDaysText(r.receipt_date, r.due_date);
+                const createdStr = formatDateTime(r.created_at);
+                const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
+                return `
+                <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-indigo-50/70 cursor-pointer">
+                  <td class="p-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${statusBadge(st)}">${st}</span></td>
+                  <td class="p-3 font-bold text-gray-900">${r.client_name || ""}</td>
+                  <td class="p-3 font-medium">${r.model_name || ""}</td>
+                  <td class="p-3 text-gray-600">${r.serial_number || "-"}</td>
+                  <td class="p-3">${r.receipt_date || ""}</td>
+                  <td class="p-3 text-blue-600 font-semibold">${r.due_date || "-"}</td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">${leadText}</span></td>
+                  <td class="p-3">${r.orderer || "-"}</td>
+                  <td class="p-3">${r.pump_change || "-"}</td>
+                  <td class="p-3">${r.option_add || "-"}</td>
+                  <td class="p-3">${r.dest_type || "-"}</td>
+                  <td class="p-3 max-w-xs truncate">${r.dest_address || "-"}</td>
+                  <td class="p-3">${r.dest_phone || "-"}</td>
+                  <td class="p-3 max-w-xs truncate text-gray-600">${r.remarks || ""}</td>
+                  <td class="p-3 text-xs text-gray-600">
+                    <div>${createdStr}</div>
+                    <div class="text-[11px] text-gray-400">생성: ${r.created_by || "-"}</div>
+                  </td>
+                  <td class="p-3 text-xs text-gray-600">
+                    <div>${updatedStr || "-"}</div>
+                    ${r.updated_by ? `<div class="text-[11px] text-gray-400">편집: ${r.updated_by}</div>` : ""}
+                  </td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 모바일 화면: 발주 대장 카드 뷰 -->
+        <div class="md:hidden space-y-3">
+          ${filtered.map(r => {
+            const st = r.shipment_status || "발주접수";
+            const leadText = formatLeadDaysText(r.receipt_date, r.due_date);
+            const createdStr = formatDateTime(r.created_at);
+            const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
+            const safeAddr = (r.dest_address || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+            return `
+            <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 active:bg-indigo-50">
+              <div class="flex justify-between items-start mb-2">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${statusBadge(st)}">${st}</span>
+                  <span class="font-bold text-base">${r.client_name || "발주처 미입력"}</span>
+                </div>
+                <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
+              </div>
+
+              <div class="text-sm text-gray-700 space-y-1.5">
+                <div>🏭 <b>${r.model_name || "모델미입력"}</b> ${r.serial_number ? `<span class="text-xs text-gray-500">(${r.serial_number})</span>` : ""}</div>
+                <div class="flex flex-wrap items-center gap-2 text-xs bg-blue-50/70 text-blue-900 px-2.5 py-1.5 rounded-lg">
+                  <span>📅 납기일: <b>${r.due_date || "미정"}</b></span>
+                  <span>·</span>
+                  <span>⏱️ 소요 예정일: <b>${leadText}</b></span>
+                  ${r.orderer ? `<span>· 발주자: <b>${r.orderer}</b></span>` : ""}
+                </div>
+                <div class="flex flex-wrap gap-1.5 text-xs">
+                  ${r.pump_change ? `<span class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">펌프: <b>${r.pump_change}</b></span>` : ""}
+                  ${r.option_add ? `<span class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">옵션: <b>${r.option_add}</b></span>` : ""}
+                  ${r.dest_type ? `<span class="bg-indigo-50 px-2 py-0.5 rounded text-indigo-700">출고지: <b>${r.dest_type}</b></span>` : ""}
+                </div>
+                <div class="flex items-start justify-between gap-2 pt-0.5">
+                  <span class="flex-1 leading-snug text-xs">📍 ${r.dest_address || "출고지 주소 미입력"}</span>
+                  ${r.dest_address ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-gray-100 active:bg-blue-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded-md text-xs font-semibold">📋 복사</button>` : ""}
+                </div>
+                ${r.remarks ? `<div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">📝 ${r.remarks}</div>` : ""}
+              </div>
+
+              <div class="mt-2.5 pt-2 border-t flex justify-between items-center text-xs gap-2">
+                <div class="text-gray-500 leading-relaxed">
+                  <div>생성: ${createdStr} (${r.created_by || "-"})</div>
+                  ${updatedStr ? `<div>편집: ${updatedStr} (${r.updated_by})</div>` : ""}
+                </div>
+                <div class="shrink-0">
+                  ${r.dest_phone ? `<a href="tel:${r.dest_phone}" onclick="event.stopPropagation()" class="bg-green-500 text-white px-2.5 py-1 rounded-lg font-semibold">📞 전화</a>` : ""}
+                </div>
+              </div>
+            </div>`;
+          }).join("")}
+        </div>
+      `;
+    }
+
     function renderRecordsArea() {
       const container = document.getElementById("recordsArea");
       if (container) {
-        container.innerHTML = buildRecordsHtml();
+        container.innerHTML = state.activeTab === "order" ? buildOrderRecordsHtml() : buildRecordsHtml();
       }
     }
 
@@ -902,7 +1350,7 @@
           <div class="min-h-screen flex items-center justify-center p-4">
             <form onsubmit="handleLogin(event)" class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-sm space-y-5">
               <div class="text-center">
-                <h1 class="text-2xl font-bold text-gray-900">AS 접수 대장</h1>
+                <h1 class="text-2xl font-bold text-gray-900">KOASIS 통합 관리 대장</h1>
                 <p class="text-sm text-gray-500 mt-1">팀원 이름으로 로그인하세요</p>
               </div>
               <div>
@@ -923,31 +1371,24 @@
         return;
       }
 
-      const statusOpts = getCfg("status")?.options || ["접수","처리중","부품대기","타업체 수리 요청","프로그램 수정 대기","처리완료","보류"];
-      const sidoOpts = getCfg("region_sido")?.options || ["서울","경기","인천","강원","충북","충남","대전","세종","전북","전남","광주","경북","경남","대구","울산","부산","제주"];
-
-      const modelSet = new Set([
-        ...(getCfg("model_name")?.options || []),
-        ...state.records.map(r => (r.model_name || "").trim()).filter(Boolean)
-      ]);
-      const modelOpts = Array.from(modelSet);
-
-      const visitorSet = new Set([
-        ...(getCfg("visitor")?.options || []),
-        ...state.records.map(r => (r.visitor || "").trim()).filter(Boolean)
-      ]);
-      const visitorOpts = Array.from(visitorSet);
-
-      const currentSortVal = `${state.sortKey}:${state.sortDir}`;
+      const isOrder = state.activeTab === "order";
       const exportRows = state.exportModalOpen ? getExportTargetRecords() : [];
 
-      app.innerHTML = `
-        <!-- 상단 바 -->
+      // 상단 공통 헤더 (맨 왼쪽 상단 2개 카테고리 메뉴 포함)
+      const headerHtml = `
         <header class="bg-white border-b sticky top-0 z-20">
-          <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
-            <div class="flex items-center gap-2">
-              <span class="font-bold text-lg text-blue-600">AS 접수 대장</span>
-              <span class="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-full font-medium">${state.username}님</span>
+          <div class="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
+              <!-- 맨 왼쪽 상단 카테고리 전환 메뉴 -->
+              <nav class="inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200">
+                <button type="button" onclick="switchTab('as')" class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition ${!isOrder ? "bg-blue-600 text-white shadow-xs" : "text-gray-600 hover:text-gray-900"}">
+                  AS 접수 대장
+                </button>
+                <button type="button" onclick="switchTab('order')" class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition ${isOrder ? "bg-indigo-600 text-white shadow-xs" : "text-gray-600 hover:text-gray-900"}">
+                  KOASIS 발주 대장
+                </button>
+              </nav>
+              <span class="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full font-medium">${state.username}님</span>
             </div>
             <div class="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
               <button id="refreshBtn" onclick="manualRefresh()" class="px-2.5 sm:px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium">🔄 새로고침</button>
@@ -958,76 +1399,180 @@
             </div>
           </div>
         </header>
+      `;
 
-        <!-- 검색 및 필터 바 -->
-        <main class="max-w-7xl mx-auto p-4 pb-24">
-          <div class="bg-white p-3 rounded-xl shadow-sm mb-3 space-y-2.5">
-            <div class="flex gap-2 items-center">
-              <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처(하이픈 없이도 가능), 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>
-              <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">+ 새 AS 접수</button>
-            </div>
+      // 메인 영역 (AS 접수 대장 vs KOASIS 발주 대장)
+      let mainHtml = "";
+      if (isOrder) {
+        const ordStatusOpts = getOrderCfg("shipment_status")?.options || ["발주접수","자재준비","생산중","출고대기","출고완료","보류"];
+        const ordDestOpts = getOrderCfg("dest_type")?.options || ["농가직송","대리점","화물","방문수령","기타"];
 
-            <!-- 날짜 구간 검색 바 -->
-            <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100 text-sm">
-              <select onchange="state.dateFilterKey=this.value;render()" class="border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white font-medium text-gray-700">
-                <option value="receipt_date" ${state.dateFilterKey==="receipt_date"?"selected":""}>기간: 접수일자</option>
-                <option value="completed_date" ${state.dateFilterKey==="completed_date"?"selected":""}>기간: 처리완료일</option>
-                <option value="visit_date" ${state.dateFilterKey==="visit_date"?"selected":""}>기간: 출장예정일</option>
-                <option value="created_at" ${state.dateFilterKey==="created_at"?"selected":""}>기간: 작성일</option>
-              </select>
-              <div class="flex items-center gap-1.5 flex-1 min-w-[240px]">
-                <input type="date" value="${state.dateFrom}" onchange="state.dateFrom=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                <span class="text-gray-400 font-bold">~</span>
-                <input type="date" value="${state.dateTo}" onchange="state.dateTo=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                ${(state.dateFrom || state.dateTo) ? `<button type="button" onclick="state.dateFrom='';state.dateTo='';render()" class="px-2 py-1.5 text-xs bg-white border rounded-lg text-gray-500 hover:text-red-600">해제</button>` : ""}
+        const ordModelSet = new Set([
+          ...(getOrderCfg("model_name")?.options || []),
+          ...state.orderRecords.map(r => (r.model_name || "").trim()).filter(Boolean)
+        ]);
+        const ordModelOpts = Array.from(ordModelSet);
+
+        const ordOrdererSet = new Set([
+          ...(getOrderCfg("orderer")?.options || []),
+          ...state.orderRecords.map(r => (r.orderer || "").trim()).filter(Boolean)
+        ]);
+        const ordOrdererOpts = Array.from(ordOrdererSet);
+
+        const curOrderSortVal = `${state.orderSortKey}:${state.orderSortDir}`;
+
+        mainHtml = `
+          <main class="max-w-7xl mx-auto p-4 pb-24">
+            <div class="bg-white p-3 rounded-xl shadow-sm mb-3 space-y-2.5">
+              <div class="flex gap-2 items-center">
+                <input id="searchInput" type="text" value="${state.orderSearch}" oninput="handleSearchInput(this.value)" placeholder="발주처, 모델명, 기대번호, 발주자, 출고지 주소, 전화번호(하이픈 없이도 가능) 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>
+                <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700">+ 새 발주 등록</button>
+              </div>
+
+              <!-- 날짜 구간 검색 바 -->
+              <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100 text-sm">
+                <select onchange="state.orderDateFilterKey=this.value;render()" class="border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white font-medium text-gray-700">
+                  <option value="receipt_date" ${state.orderDateFilterKey==="receipt_date"?"selected":""}>기간: 접수일</option>
+                  <option value="due_date" ${state.orderDateFilterKey==="due_date"?"selected":""}>기간: 납기일</option>
+                  <option value="created_at" ${state.orderDateFilterKey==="created_at"?"selected":""}>기간: 생성일시</option>
+                </select>
+                <div class="flex items-center gap-1.5 flex-1 min-w-[240px]">
+                  <input type="date" value="${state.orderDateFrom}" onchange="state.orderDateFrom=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  <span class="text-gray-400 font-bold">~</span>
+                  <input type="date" value="${state.orderDateTo}" onchange="state.orderDateTo=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  ${(state.orderDateFrom || state.orderDateTo) ? `<button type="button" onclick="state.orderDateFrom='';state.orderDateTo='';render()" class="px-2 py-1.5 text-xs bg-white border rounded-lg text-gray-500 hover:text-red-600">해제</button>` : ""}
+                </div>
+              </div>
+
+              <!-- 항목 필터 바 -->
+              <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
+                <select onchange="state.orderStatusFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.orderStatusFilter==="전체"?"selected":""}>출고 현황: 전체</option>
+                  ${ordStatusOpts.map(o => `<option value="${o}" ${state.orderStatusFilter===o?"selected":""}>${o}</option>`).join("")}
+                </select>
+                <select onchange="state.orderModelFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.orderModelFilter==="전체"?"selected":""}>모델명: 전체</option>
+                  ${ordModelOpts.map(m => `<option value="${m}" ${state.orderModelFilter===m?"selected":""}>${m}</option>`).join("")}
+                </select>
+                <select onchange="state.orderOrdererFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.orderOrdererFilter==="전체"?"selected":""}>발주자: 전체</option>
+                  ${ordOrdererOpts.map(v => `<option value="${v}" ${state.orderOrdererFilter===v?"selected":""}>${v}</option>`).join("")}
+                </select>
+                <select onchange="state.orderDestTypeFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.orderDestTypeFilter==="전체"?"selected":""}>출고지 유형: 전체</option>
+                  ${ordDestOpts.map(d => `<option value="${d}" ${state.orderDestTypeFilter===d?"selected":""}>${d}</option>`).join("")}
+                </select>
+                <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-indigo-200 rounded-lg px-2.5 py-2 text-sm bg-indigo-50/40 font-medium text-indigo-900">
+                  <option value="created_at:desc" ${curOrderSortVal==="created_at:desc"?"selected":""}>정렬: 생성일시 최신순 ▼</option>
+                  <option value="created_at:asc" ${curOrderSortVal==="created_at:asc"?"selected":""}>정렬: 생성일시 오래된순 ▲</option>
+                  <option value="due_date:asc" ${curOrderSortVal==="due_date:asc"?"selected":""}>정렬: 납기일 빠른순 ▲</option>
+                  <option value="due_date:desc" ${curOrderSortVal==="due_date:desc"?"selected":""}>정렬: 납기일 늦은순 ▼</option>
+                  <option value="receipt_date:desc" ${curOrderSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일 최신순 ▼</option>
+                  <option value="lead_days:desc" ${curOrderSortVal==="lead_days:desc"?"selected":""}>정렬: 소요 예정일 긴순 ▼</option>
+                  <option value="client_name:asc" ${curOrderSortVal==="client_name:asc"?"selected":""}>정렬: 발주처 가나다순 ▲</option>
+                  <option value="shipment_status:asc" ${curOrderSortVal==="shipment_status:asc"?"selected":""}>정렬: 출고 현황순 ▲</option>
+                </select>
               </div>
             </div>
 
-            <!-- 항목 필터 바 -->
-            <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
-              <select onchange="state.statusFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
-                <option value="전체" ${state.statusFilter==="전체"?"selected":""}>상태: 전체</option>
-                ${statusOpts.map(o => `<option value="${o}" ${state.statusFilter===o?"selected":""}>${o}</option>`).join("")}
-              </select>
-              <select onchange="state.sidoFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
-                <option value="전체" ${state.sidoFilter==="전체"?"selected":""}>지역: 전체</option>
-                ${sidoOpts.map(s => `<option value="${s}" ${state.sidoFilter===s?"selected":""}>${s}</option>`).join("")}
-              </select>
-              <select onchange="state.modelFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
-                <option value="전체" ${state.modelFilter==="전체"?"selected":""}>모델명: 전체</option>
-                ${modelOpts.map(m => `<option value="${m}" ${state.modelFilter===m?"selected":""}>${m}</option>`).join("")}
-              </select>
-              <select onchange="state.visitorFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
-                <option value="전체" ${state.visitorFilter==="전체"?"selected":""}>방문자: 전체</option>
-                ${visitorOpts.map(v => `<option value="${v}" ${state.visitorFilter===v?"selected":""}>${v}</option>`).join("")}
-              </select>
-              <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-blue-200 rounded-lg px-2.5 py-2 text-sm bg-blue-50/40 font-medium text-blue-900">
-                <option value="created_at:desc" ${currentSortVal==="created_at:desc"?"selected":""}>정렬: 작성일 최신순 ▼</option>
-                <option value="created_at:asc" ${currentSortVal==="created_at:asc"?"selected":""}>정렬: 작성일 오래된순 ▲</option>
-                <option value="receipt_date:desc" ${currentSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일자 최신순 ▼</option>
-                <option value="receipt_date:asc" ${currentSortVal==="receipt_date:asc"?"selected":""}>정렬: 접수일자 오래된순 ▲</option>
-                <option value="visit_date:asc" ${currentSortVal==="visit_date:asc"?"selected":""}>정렬: 출장예정일 빠른순 ▲</option>
-                <option value="visit_date:desc" ${currentSortVal==="visit_date:desc"?"selected":""}>정렬: 출장예정일 늦은순 ▼</option>
-                <option value="urgency:desc" ${currentSortVal==="urgency:desc"?"selected":""}>정렬: 긴급도 높은순 ▼</option>
-                <option value="status:asc" ${currentSortVal==="status:asc"?"selected":""}>정렬: 상태순 ▲</option>
-                <option value="customer_name:asc" ${currentSortVal==="customer_name:asc"?"selected":""}>정렬: 고객명 가나다순 ▲</option>
-                <option value="region_sido:asc" ${currentSortVal==="region_sido:asc"?"selected":""}>정렬: 지역순 ▲</option>
-                <option value="model_name:asc" ${currentSortVal==="model_name:asc"?"selected":""}>정렬: 모델명순 ▲</option>
-                <option value="visitor:asc" ${currentSortVal==="visitor:asc"?"selected":""}>정렬: 방문자순 ▲</option>
-                <option value="total_cost:desc" ${currentSortVal==="total_cost:desc"?"selected":""}>정렬: 합계금액 높은순 ▼</option>
-              </select>
+            <div id="recordsArea">${buildOrderRecordsHtml()}</div>
+          </main>
+
+          <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-indigo-600 text-white px-5 py-3.5 rounded-full shadow-xl font-bold text-base z-20">+ 발주 등록</button>
+        `;
+      } else {
+        const statusOpts = getCfg("status")?.options || ["접수","처리중","부품대기","타업체 수리 요청","프로그램 수정 대기","처리완료","보류"];
+        const sidoOpts = getCfg("region_sido")?.options || ["서울","경기","인천","강원","충북","충남","대전","세종","전북","전남","광주","경북","경남","대구","울산","부산","제주"];
+
+        const modelSet = new Set([
+          ...(getCfg("model_name")?.options || []),
+          ...state.records.map(r => (r.model_name || "").trim()).filter(Boolean)
+        ]);
+        const modelOpts = Array.from(modelSet);
+
+        const visitorSet = new Set([
+          ...(getCfg("visitor")?.options || []),
+          ...state.records.map(r => (r.visitor || "").trim()).filter(Boolean)
+        ]);
+        const visitorOpts = Array.from(visitorSet);
+
+        const currentSortVal = `${state.sortKey}:${state.sortDir}`;
+
+        mainHtml = `
+          <main class="max-w-7xl mx-auto p-4 pb-24">
+            <div class="bg-white p-3 rounded-xl shadow-sm mb-3 space-y-2.5">
+              <div class="flex gap-2 items-center">
+                <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처(하이픈 없이도 가능), 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>
+                <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">+ 새 AS 접수</button>
+              </div>
+
+              <!-- 날짜 구간 검색 바 -->
+              <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100 text-sm">
+                <select onchange="state.dateFilterKey=this.value;render()" class="border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white font-medium text-gray-700">
+                  <option value="receipt_date" ${state.dateFilterKey==="receipt_date"?"selected":""}>기간: 접수일자</option>
+                  <option value="completed_date" ${state.dateFilterKey==="completed_date"?"selected":""}>기간: 처리완료일</option>
+                  <option value="visit_date" ${state.dateFilterKey==="visit_date"?"selected":""}>기간: 출장예정일</option>
+                  <option value="created_at" ${state.dateFilterKey==="created_at"?"selected":""}>기간: 작성일</option>
+                </select>
+                <div class="flex items-center gap-1.5 flex-1 min-w-[240px]">
+                  <input type="date" value="${state.dateFrom}" onchange="state.dateFrom=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  <span class="text-gray-400 font-bold">~</span>
+                  <input type="date" value="${state.dateTo}" onchange="state.dateTo=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  ${(state.dateFrom || state.dateTo) ? `<button type="button" onclick="state.dateFrom='';state.dateTo='';render()" class="px-2 py-1.5 text-xs bg-white border rounded-lg text-gray-500 hover:text-red-600">해제</button>` : ""}
+                </div>
+              </div>
+
+              <!-- 항목 필터 바 -->
+              <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
+                <select onchange="state.statusFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.statusFilter==="전체"?"selected":""}>상태: 전체</option>
+                  ${statusOpts.map(o => `<option value="${o}" ${state.statusFilter===o?"selected":""}>${o}</option>`).join("")}
+                </select>
+                <select onchange="state.sidoFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.sidoFilter==="전체"?"selected":""}>지역: 전체</option>
+                  ${sidoOpts.map(s => `<option value="${s}" ${state.sidoFilter===s?"selected":""}>${s}</option>`).join("")}
+                </select>
+                <select onchange="state.modelFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.modelFilter==="전체"?"selected":""}>모델명: 전체</option>
+                  ${modelOpts.map(m => `<option value="${m}" ${state.modelFilter===m?"selected":""}>${m}</option>`).join("")}
+                </select>
+                <select onchange="state.visitorFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                  <option value="전체" ${state.visitorFilter==="전체"?"selected":""}>방문자: 전체</option>
+                  ${visitorOpts.map(v => `<option value="${v}" ${state.visitorFilter===v?"selected":""}>${v}</option>`).join("")}
+                </select>
+                <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-blue-200 rounded-lg px-2.5 py-2 text-sm bg-blue-50/40 font-medium text-blue-900">
+                  <option value="created_at:desc" ${currentSortVal==="created_at:desc"?"selected":""}>정렬: 작성일 최신순 ▼</option>
+                  <option value="created_at:asc" ${currentSortVal==="created_at:asc"?"selected":""}>정렬: 작성일 오래된순 ▲</option>
+                  <option value="receipt_date:desc" ${currentSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일자 최신순 ▼</option>
+                  <option value="receipt_date:asc" ${currentSortVal==="receipt_date:asc"?"selected":""}>정렬: 접수일자 오래된순 ▲</option>
+                  <option value="visit_date:asc" ${currentSortVal==="visit_date:asc"?"selected":""}>정렬: 출장예정일 빠른순 ▲</option>
+                  <option value="visit_date:desc" ${currentSortVal==="visit_date:desc"?"selected":""}>정렬: 출장예정일 늦은순 ▼</option>
+                  <option value="urgency:desc" ${currentSortVal==="urgency:desc"?"selected":""}>정렬: 긴급도 높은순 ▼</option>
+                  <option value="status:asc" ${currentSortVal==="status:asc"?"selected":""}>정렬: 상태순 ▲</option>
+                  <option value="customer_name:asc" ${currentSortVal==="customer_name:asc"?"selected":""}>정렬: 고객명 가나다순 ▲</option>
+                  <option value="region_sido:asc" ${currentSortVal==="region_sido:asc"?"selected":""}>정렬: 지역순 ▲</option>
+                  <option value="model_name:asc" ${currentSortVal==="model_name:asc"?"selected":""}>정렬: 모델명순 ▲</option>
+                  <option value="visitor:asc" ${currentSortVal==="visitor:asc"?"selected":""}>정렬: 방문자순 ▲</option>
+                  <option value="total_cost:desc" ${currentSortVal==="total_cost:desc"?"selected":""}>정렬: 합계금액 높은순 ▼</option>
+                </select>
+              </div>
             </div>
-          </div>
 
-          <div id="recordsArea">${buildRecordsHtml()}</div>
-        </main>
+            <div id="recordsArea">${buildRecordsHtml()}</div>
+          </main>
 
-        <!-- 모바일 하단 고정 + 접수 버튼 -->
-        <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-blue-600 text-white px-5 py-3.5 rounded-full shadow-xl font-bold text-base z-20">+ AS 접수</button>
+          <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-blue-600 text-white px-5 py-3.5 rounded-full shadow-xl font-bold text-base z-20">+ AS 접수</button>
+        `;
+      }
+
+      app.innerHTML = `
+        ${headerHtml}
+        ${mainHtml}
 
         <!-- 접수/수정 모달 창 -->
-        ${state.modalOpen ? renderFormModal() : ""}
+        ${state.modalOpen ? (isOrder ? renderOrderFormModal() : renderFormModal()) : ""}
 
         <!-- 항목 및 옵션 관리 모달 창 -->
         ${state.configModalOpen ? renderConfigModal() : ""}
@@ -1037,11 +1582,10 @@
           <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
             <div class="bg-white rounded-2xl p-5 w-full max-w-md space-y-4">
               <div class="flex justify-between items-center border-b pb-2">
-                <h2 class="font-bold text-lg">엑셀 다운로드 설정</h2>
+                <h2 class="font-bold text-lg">${isOrder ? "KOASIS 발주 대장" : "AS 접수 대장"} 엑셀 다운로드</h2>
                 <button onclick="state.exportModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
               </div>
 
-              <!-- 다운로드 기간 선택 영역 -->
               <div class="bg-gray-50 p-3.5 rounded-xl border space-y-2.5 text-sm">
                 <div class="flex justify-between items-center">
                   <span class="font-bold text-gray-800">1. 다운로드 기간 선택</span>
@@ -1052,10 +1596,16 @@
                   </div>
                 </div>
                 <select onchange="state.exportDateKey=this.value;render()" class="w-full border rounded-lg px-2.5 py-2 bg-white text-sm">
-                  <option value="receipt_date" ${state.exportDateKey==="receipt_date"?"selected":""}>기준 날짜: 접수일자</option>
-                  <option value="completed_date" ${state.exportDateKey==="completed_date"?"selected":""}>기준 날짜: 처리완료일</option>
-                  <option value="visit_date" ${state.exportDateKey==="visit_date"?"selected":""}>기준 날짜: 출장예정일</option>
-                  <option value="created_at" ${state.exportDateKey==="created_at"?"selected":""}>기준 날짜: 작성일</option>
+                  ${isOrder ? `
+                    <option value="receipt_date" ${state.exportDateKey==="receipt_date"?"selected":""}>기준 날짜: 접수일</option>
+                    <option value="due_date" ${state.exportDateKey==="due_date"?"selected":""}>기준 날짜: 납기일</option>
+                    <option value="created_at" ${state.exportDateKey==="created_at"?"selected":""}>기준 날짜: 생성일시</option>
+                  ` : `
+                    <option value="receipt_date" ${state.exportDateKey==="receipt_date"?"selected":""}>기준 날짜: 접수일자</option>
+                    <option value="completed_date" ${state.exportDateKey==="completed_date"?"selected":""}>기준 날짜: 처리완료일</option>
+                    <option value="visit_date" ${state.exportDateKey==="visit_date"?"selected":""}>기준 날짜: 출장예정일</option>
+                    <option value="created_at" ${state.exportDateKey==="created_at"?"selected":""}>기준 날짜: 작성일</option>
+                  `}
                 </select>
                 <div class="flex items-center gap-2">
                   <input type="date" value="${state.exportDateFrom}" onchange="state.exportDateFrom=this.value;render()" class="flex-1 border rounded-lg px-2.5 py-1.5 bg-white text-sm" />
@@ -1065,7 +1615,6 @@
                 <p class="text-xs text-blue-700 font-medium">※ 선택 조건에 해당하는 <b>${exportRows.length}건</b>이 다운로드됩니다.</p>
               </div>
 
-              <!-- 파일 형식 선택 영역 -->
               <div class="space-y-2">
                 <div class="font-bold text-sm text-gray-800">2. 엑셀 파일 형식 선택</div>
                 <button onclick="exportExcel('xls')" class="w-full text-left p-3 rounded-xl border-2 border-emerald-500 bg-emerald-50/60 hover:bg-emerald-100 transition">
@@ -1103,8 +1652,10 @@
     function renderDynamicInput(cfg, val, isRequired = false) {
       const nameAttr = cfg.is_system ? cfg.field_key : `custom_${cfg.field_key}`;
       const reqAttr = isRequired ? "required" : "";
-      const fullSpan = (cfg.field_key === "address_detail" || cfg.field_type === "textarea") ? "col-span-2" : "";
+      const isFullSpan = (cfg.field_key === "address_detail" || cfg.field_key === "dest_address" || cfg.field_type === "textarea");
+      const fullSpan = isFullSpan ? "col-span-2" : "";
       const isPhone = PHONE_KEYS.includes(cfg.field_key);
+      const isOrderDateTrigger = state.activeTab === "order" && (cfg.field_key === "receipt_date" || cfg.field_key === "due_date");
 
       let inputHtml = "";
       if (cfg.field_type === "select") {
@@ -1116,7 +1667,8 @@
             ${val && !opts.includes(val) ? `<option value="${val}" selected>${val}</option>` : ""}
           </select>`;
       } else if (cfg.field_type === "date" || DATE_KEYS.includes(cfg.field_key)) {
-        inputHtml = `<input type="date" name="${nameAttr}" value="${val}" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
+        const onChangeAttr = isOrderDateTrigger ? `onchange="updateModalLeadTime()"` : "";
+        inputHtml = `<input type="date" name="${nameAttr}" value="${val}" ${onChangeAttr} ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
       } else if (cfg.field_type === "textarea" || TEXTAREA_KEYS.includes(cfg.field_key)) {
         inputHtml = `<textarea name="${nameAttr}" rows="2" ${reqAttr} class="w-full border rounded-lg px-3 py-2">${val}</textarea>`;
       } else if (isPhone) {
@@ -1126,8 +1678,8 @@
         inputHtml = `<input type="text" name="${nameAttr}" value="${val}" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
       }
 
-      const copyBtn = cfg.field_key === "address_detail"
-        ? `<button type="button" onclick="copyModalAddress()" class="text-xs bg-gray-100 hover:bg-blue-50 text-blue-600 border border-gray-200 px-2 py-0.5 rounded font-semibold">📋 전체주소 복사</button>`
+      const copyBtn = (cfg.field_key === "address_detail" || cfg.field_key === "dest_address")
+        ? `<button type="button" onclick="copyModalAddress()" class="text-xs bg-gray-100 hover:bg-blue-50 text-blue-600 border border-gray-200 px-2 py-0.5 rounded font-semibold">📋 주소 복사</button>`
         : "";
 
       return `
@@ -1140,6 +1692,7 @@
         </div>`;
     }
 
+    // AS 접수 대장 입력/수정 모달
     function renderFormModal() {
       const r = state.editingRecord || {};
       const today = new Date().toISOString().slice(0, 10);
@@ -1154,10 +1707,10 @@
       const vat = getVatAmount(payType, repair, parts);
       const total = calculateTotal(payType, repair, parts);
 
-      let subText = "(출장비 + 부품비 / 수리비 구분 미선택)";
+      let subText = "(수리비 + 부품비 / 수리비 구분 미선택)";
       if (payType === "세금계산서") subText = `(공급가 ${(repair+parts).toLocaleString()}원 + 부가세 ${vat.toLocaleString()}원)`;
       if (payType === "무상") subText = `(내부 발생비용 ${(repair+parts).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
-      if (payType === "현금") subText = "(출장비 + 부품비 / 부가세 0원)";
+      if (payType === "현금") subText = "(수리비 + 부품비 / 부가세 0원)";
 
       return `
         <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
@@ -1178,7 +1731,7 @@
                 if (!r.id && c.field_key === "receipt_date") val = today;
                 if (!r.id && c.field_key === "status") val = "접수";
                 if (!r.id && c.field_key === "urgency") val = defaultUrgency;
-                if (!r.id && c.field_key === "receipt_channel") val = "";
+                if (!r.id && c.field_key === "receipt_channel") val = "전화";
                 if (!r.id && c.field_key === "replacement_type") val = "해당없음";
                 return renderDynamicInput(c, val, REQUIRED_KEYS.includes(c.field_key));
               }).join("")}
@@ -1204,7 +1757,7 @@
                   </select>
                 </div>
                 <div>
-                  <label class="block font-medium text-xs mb-1">출장비 (원)</label>
+                  <label class="block font-medium text-xs mb-1">수리비 (원)</label>
                   <input id="inpRepairCost" type="number" name="repair_cost" value="${repair}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
                 </div>
                 <div>
@@ -1236,9 +1789,77 @@
         </div>`;
     }
 
+    // KOASIS 발주 대장 입력/수정 모달
+    function renderOrderFormModal() {
+      const r = state.editingRecord || {};
+      const today = new Date().toISOString().slice(0, 10);
+
+      const sysCols = ORDER_SYSTEM_KEYS.map(k => getOrderCfg(k)).filter(Boolean);
+      const customCols = state.orderConfigs.filter(c => !c.is_system);
+
+      const initReceipt = r.id ? (r.receipt_date || "") : today;
+      const initDue = r.due_date || "";
+      const leadText = formatLeadDaysText(initReceipt, initDue);
+
+      return `
+        <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
+          <form id="orderRecordForm" onsubmit="saveOrderRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
+            <div class="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
+              <div>
+                <h2 class="font-bold text-lg">${r.id ? "KOASIS 발주 내역 상세 / 수정" : "새 KOASIS 발주 등록"}</h2>
+                <p class="text-xs text-gray-500 mt-0.5"><span class="text-red-500 font-bold">*</span> 표시는 필수 입력 항목입니다</p>
+              </div>
+              <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
+            </div>
+
+            ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">생성일시: <b>${formatDateTime(r.created_at)}</b> (생성자: <b>${r.created_by || "-"}</b>) / 최종 편집: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
+
+            <div class="grid grid-cols-2 gap-3 text-sm">
+              ${sysCols.map(c => {
+                let val = r[c.field_key] ?? "";
+                if (!r.id && c.field_key === "receipt_date") val = today;
+                if (!r.id && c.field_key === "shipment_status") val = "발주접수";
+                if (!r.id && c.field_key === "orderer") val = state.username;
+
+                const fieldHtml = renderDynamicInput(c, val, ORDER_REQUIRED_KEYS.includes(c.field_key));
+                if (c.field_key === "due_date") {
+                  return fieldHtml + `
+                    <div class="col-span-2 bg-indigo-50/70 border border-indigo-100 rounded-lg px-3 py-2 flex justify-between items-center text-xs sm:text-sm">
+                      <span class="font-medium text-indigo-900">⏱️ 소요 예정일 (접수일 ~ 납기일 자동 계산)</span>
+                      <span id="modalLeadTimeDisplay" class="font-bold text-indigo-700 text-base">${leadText}</span>
+                    </div>`;
+                }
+                return fieldHtml;
+              }).join("")}
+            </div>
+
+            ${customCols.length > 0 ? `
+              <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
+                ${customCols.map(c => {
+                  const val = (r.custom_fields && r.custom_fields[c.field_key]) || "";
+                  return renderDynamicInput(c, val, false);
+                }).join("")}
+              </div>` : ""}
+
+            <div class="flex justify-between pt-3 border-t">
+              ${r.id ? `<button type="button" onclick="deleteRecord('${r.id}')" class="px-4 py-2.5 text-red-600 bg-red-50 rounded-lg text-sm font-medium">삭제</button>` : `<div></div>`}
+              <div class="flex gap-2">
+                <button type="button" onclick="state.modalOpen=false;render()" class="px-4 py-2.5 bg-gray-100 rounded-lg text-sm">취소</button>
+                <button type="submit" class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장하기</button>
+              </div>
+            </div>
+          </form>
+        </div>`;
+    }
+
     function renderConfigModal() {
-      const sysCols = SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
-      const customCols = state.configs.filter(c => !c.is_system);
+      const isOrder = state.activeTab === "order";
+      const sysCols = isOrder
+        ? ORDER_SYSTEM_KEYS.map(k => getOrderCfg(k)).filter(Boolean)
+        : SYSTEM_KEYS.map(k => getCfg(k)).filter(Boolean);
+      const customCols = isOrder
+        ? state.orderConfigs.filter(c => !c.is_system)
+        : state.configs.filter(c => !c.is_system);
 
       const renderConfigRow = (c) => {
         const isSelect = c.field_type === "select";
@@ -1268,12 +1889,12 @@
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div class="bg-white rounded-2xl p-5 w-full max-w-xl max-h-[90vh] overflow-y-auto space-y-5 text-sm">
             <div class="flex justify-between items-center border-b pb-2 sticky top-0 bg-white z-10">
-              <h2 class="font-bold text-lg">항목 및 입력 방식(텍스트/선택형) 관리</h2>
+              <h2 class="font-bold text-lg">${isOrder ? "KOASIS 발주 대장" : "AS 접수 대장"} 항목 및 옵션 관리</h2>
               <button onclick="state.configModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
             </div>
 
             <form onsubmit="addNewField(event)" class="bg-emerald-50/70 p-3.5 rounded-xl space-y-2 border border-emerald-200">
-              <h3 class="font-bold text-emerald-900">+ 새 입력 항목 추가하기 (금액 박스 위에 표시됨)</h3>
+              <h3 class="font-bold text-emerald-900">+ 새 입력 항목 추가하기</h3>
               <div class="grid grid-cols-2 gap-2">
                 <input id="newFieldLabel" placeholder="새 항목명 입력" class="border rounded px-2.5 py-2 bg-white" />
                 <select id="newFieldType" onchange="document.getElementById('newFieldOpts').style.display=this.value==='select'?'block':'none'" class="border rounded px-2.5 py-2 bg-white">
