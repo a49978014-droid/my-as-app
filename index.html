@@ -1149,10 +1149,10 @@
       const fallback = DEFAULT_ORDER_CONFIGS.find(c => c.field_key === key);
       const cfg = found || fallback;
       if (!cfg) return null;
-      if (ORDER_FORCE_SELECT_KEYS.includes(key)) {
+     if (ORDER_FORCE_SELECT_KEYS.includes(key)) {
         let mergedOpts = [...(cfg.options || [])];
-        if (key === "orderer" && state.teamUsernames.length > 0) {
-          mergedOpts = Array.from(new Set([...mergedOpts, ...state.teamUsernames]));
+        if (mergedOpts.length === 0 && key === "orderer" && state.teamUsernames.length > 0) {
+          mergedOpts = [...state.teamUsernames];
         }
         if (mergedOpts.length === 0 && fallback?.options) {
           mergedOpts = [...fallback.options];
@@ -1563,7 +1563,6 @@
 
         const ordOrdererSet = new Set([
           ...(getOrderCfg("orderer")?.options || []),
-          ...state.teamUsernames,
           ...state.orderRecords.map(r => (r.orderer || "").trim()).filter(Boolean)
         ]);
         const ordOrdererOpts = Array.from(ordOrdererSet);
