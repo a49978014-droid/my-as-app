@@ -32,6 +32,7 @@
       activeTab: "as", // "as" (AS 접수 대장) | "order" (KOASIS 발주 대장)
       user: null,
       username: "",
+      teamUsernames: [],
       // AS 접수 대장 상태
       records: [],
       configs: [],
@@ -84,14 +85,19 @@
       "serial_number", "dest_type", "dest_address", "dest_phone", "remarks"
     ];
 
+    // 발주 대장에서 반드시 선택형(select)으로 유지할 항목 키
+    const ORDER_FORCE_SELECT_KEYS = [
+      "shipment_status", "model_name", "orderer", "pump_change", "option_add"
+    ];
+
     // DB 설정 테이블이 비어 있을 때를 대비한 발주 대장 기본 항목 정의
     const DEFAULT_ORDER_CONFIGS = [
       { field_key: "client_name", field_label: "발주처", field_type: "text", options: [], is_system: true, sort_order: 1 },
       { field_key: "shipment_status", field_label: "출고 현황", field_type: "select", options: ["발주접수","자재준비","생산중","출고대기","출고완료","보류"], is_system: true, sort_order: 2 },
       { field_key: "receipt_date", field_label: "접수일", field_type: "date", options: [], is_system: true, sort_order: 3 },
       { field_key: "due_date", field_label: "납기일", field_type: "date", options: [], is_system: true, sort_order: 4 },
-      { field_key: "model_name", field_label: "모델명", field_type: "text", options: [], is_system: true, sort_order: 5 },
-      { field_key: "orderer", field_label: "발주자", field_type: "text", options: [], is_system: true, sort_order: 6 },
+      { field_key: "model_name", field_label: "모델명", field_type: "select", options: ["양액기 표준형","양액기 고급형","복합환경제어기","관수제어기","기타모델"], is_system: true, sort_order: 5 },
+      { field_key: "orderer", field_label: "발주자", field_type: "select", options: [], is_system: true, sort_order: 6 },
       { field_key: "pump_change", field_label: "펌프 변경", field_type: "select", options: ["변경없음","용량변경","사양변경","별도문의"], is_system: true, sort_order: 7 },
       { field_key: "option_add", field_label: "옵션 추가", field_type: "select", options: ["없음","EC/pH센서","일사센서","외부접점","통신모듈","기타옵션"], is_system: true, sort_order: 8 },
       { field_key: "serial_number", field_label: "기대번호", field_type: "text", options: [], is_system: true, sort_order: 9 },
@@ -427,23 +433,48 @@
     }
 
     async function loadAllData(silent = false) {
-      const [recRes, cfgRes, ordRes, ordCfgRes] = await Promise.all([
+      const [recRes, cfgRes, ordRes, ordCfgRes, teamRes] = await Promise.all([
         sb.from("as_records").select("*").order("created_at", { ascending: false }),
         sb.from("field_configs").select("*").order("sort_order", { ascending: true }),
         sb.from("order_records").select("*").order("created_at", { ascending: false }),
-        sb.from("order_field_configs").select("*").order("sort_order", { ascending: true })
+        sb.from("order_field_configs").select("*").order("sort_order", { ascending: true }),
+        sb.from("team_profiles").select("username")
       ]);
       if (recRes.data) state.records = recRes.data;
       if (cfgRes.data) state.configs = cfgRes.data;
       if (ordRes.data) state.orderRecords = ordRes.data;
+      if (teamRes.data) {
+        state.teamUsernames = teamRes.data.map(t => t.username).filter(Boolean);
+      }
+
+      const buildDefaultConfigsWithTeam = () => DEFAULT_ORDER_CONFIGS.map(c => {
+        if (c.field_key === "orderer" && state.teamUsernames.length > 0) {
+          return { ...c, options: [...state.teamUsernames] };
+        }
+        return { ...c };
+      });
+
       if (ordCfgRes.data && ordCfgRes.data.length > 0) {
-        state.orderConfigs = ordCfgRes.data;
+        let cfgs = ordCfgRes.data;
+        // 지정된 5개 항목이 기존 DB에 텍스트형으로 되어 있으면 자동으로 선택형(select)으로 전환
+        for (const c of cfgs) {
+          if (ORDER_FORCE_SELECT_KEYS.includes(c.field_key) && c.field_type !== "select") {
+            const defCfg = buildDefaultConfigsWithTeam().find(d => d.field_key === c.field_key);
+            const nextOpts = (c.options && c.options.length > 0) ? c.options : (defCfg?.options || []);
+            c.field_type = "select";
+            c.options = nextOpts;
+            if (c.id) {
+              await sb.from("order_field_configs").update({ field_type: "select", options: nextOpts }).eq("id", c.id);
+            }
+          }
+        }
+        state.orderConfigs = cfgs;
       } else if (!ordCfgRes.error && ordCfgRes.data && ordCfgRes.data.length === 0) {
-        // 테이블은 만들어져 있으나 초기 데이터가 비어 있는 경우 자동 채움
-        const { data: inserted } = await sb.from("order_field_configs").insert(DEFAULT_ORDER_CONFIGS).select("*").order("sort_order", { ascending: true });
-        state.orderConfigs = inserted && inserted.length > 0 ? inserted : DEFAULT_ORDER_CONFIGS;
+        const initRows = buildDefaultConfigsWithTeam();
+        const { data: inserted } = await sb.from("order_field_configs").insert(initRows).select("*").order("sort_order", { ascending: true });
+        state.orderConfigs = inserted && inserted.length > 0 ? inserted : initRows;
       } else {
-        state.orderConfigs = DEFAULT_ORDER_CONFIGS;
+        state.orderConfigs = buildDefaultConfigsWithTeam();
       }
     }
 
@@ -932,7 +963,7 @@
         headers = [
           ...sysCols.map(c => c.field_label),
           ...customCols.map(c => c.field_label),
-          "수리비구분", "출장비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
+          "출장비구분", "출장비", "부품비", "부가세", "최종합계", "작성일", "최초작성자", "최종수정자"
         ];
 
         dataRows = rows.map(r => {
@@ -1033,7 +1064,7 @@
         } else if (payType === "현금") {
           subEl.innerText = `(출장비 + 부품비 / 부가세 0원)`;
         } else {
-          subEl.innerText = `(출장비 + 부품비 / 수리비 구분 미선택)`;
+          subEl.innerText = `(출장비 + 부품비 / 출장비 구분 미선택)`;
         }
       }
     }
@@ -1043,7 +1074,21 @@
     }
 
     function getOrderCfg(key) {
-      return state.orderConfigs.find(c => c.field_key === key) || DEFAULT_ORDER_CONFIGS.find(c => c.field_key === key);
+      const found = state.orderConfigs.find(c => c.field_key === key);
+      const fallback = DEFAULT_ORDER_CONFIGS.find(c => c.field_key === key);
+      const cfg = found || fallback;
+      if (!cfg) return null;
+      if (ORDER_FORCE_SELECT_KEYS.includes(key)) {
+        let mergedOpts = [...(cfg.options || [])];
+        if (key === "orderer" && state.teamUsernames.length > 0) {
+          mergedOpts = Array.from(new Set([...mergedOpts, ...state.teamUsernames]));
+        }
+        if (mergedOpts.length === 0 && fallback?.options) {
+          mergedOpts = [...fallback.options];
+        }
+        return { ...cfg, field_type: "select", options: mergedOpts };
+      }
+      return cfg;
     }
 
     function renderSortTh(key, label, alignRight = false) {
@@ -1197,7 +1242,7 @@
               <div class="mt-2.5 bg-gray-50 px-2.5 py-1.5 rounded-lg flex justify-between items-center text-xs">
                 <div class="flex items-center gap-1.5 flex-wrap">
                   <span class="px-1.5 py-0.5 rounded font-semibold ${paymentBadge(pt)}">${pt || "미선택"}</span>
-                  <span class="text-gray-600">수리 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()} / 부가세 ${vat.toLocaleString()}</span>
+                  <span class="text-gray-600">출장 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()} / 부가세 ${vat.toLocaleString()}</span>
                 </div>
                 <span class="font-bold text-sm text-blue-700 shrink-0 ml-1">합계 ${(r.total_cost || 0).toLocaleString()}원</span>
               </div>
@@ -1447,6 +1492,7 @@
 
         const ordOrdererSet = new Set([
           ...(getOrderCfg("orderer")?.options || []),
+          ...state.teamUsernames,
           ...state.orderRecords.map(r => (r.orderer || "").trim()).filter(Boolean)
         ]);
         const ordOrdererOpts = Array.from(ordOrdererSet);
@@ -1739,7 +1785,7 @@
       const vat = getVatAmount(payType, repair, parts);
       const total = calculateTotal(payType, repair, parts);
 
-      let subText = "(출장비 + 부품비 / 수리비 구분 미선택)";
+      let subText = "(출장비 + 부품비 / 출장비 구분 미선택)";
       if (payType === "세금계산서") subText = `(공급가 ${(repair+parts).toLocaleString()}원 + 부가세 ${vat.toLocaleString()}원)`;
       if (payType === "무상") subText = `(내부 발생비용 ${(repair+parts).toLocaleString()}원 / 부가세 0원 / 청구 0원)`;
       if (payType === "현금") subText = "(출장비 + 부품비 / 부가세 0원)";
@@ -1780,7 +1826,7 @@
             <div class="bg-blue-50 p-3.5 rounded-xl space-y-3 text-sm">
               <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div>
-                  <label class="block font-bold text-xs text-blue-900 mb-1">수리비 구분</label>
+                  <label class="block font-bold text-xs text-blue-900 mb-1">출장비 구분</label>
                   <select id="inpPaymentType" name="payment_type" onchange="calcModalTotal()" class="w-full border border-blue-200 rounded-lg px-2 py-2 bg-white font-semibold">
                     <option value="" ${payType===""?"selected":""}>선택</option>
                     <option value="현금" ${payType==="현금"?"selected":""}>현금</option>
