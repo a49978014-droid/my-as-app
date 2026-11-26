@@ -179,10 +179,10 @@
       return `${diff}일`;
     }
 
-    // 납기일 D-Day 및 카드/행 테마 계산
+    // 납기일 D-Day 및 카드/행 테마 계산 (출고완료 및 출고대기는 경고 미적용)
     function getOrderDueTheme(dueDate, shipmentStatus) {
-      const isDone = normalizeStatus(shipmentStatus) === "출고완료";
-      if (isDone) {
+      const cleanStatus = normalizeStatus(shipmentStatus);
+      if (cleanStatus === "출고완료") {
         return {
           level: "done",
           diff: null,
@@ -190,6 +190,16 @@
           rowClass: "bg-slate-50/50 hover:bg-emerald-50/40",
           dueBoxClass: "bg-emerald-50/80 border-emerald-200 text-emerald-900",
           badgeHtml: `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">✓ 출고완료</span>`
+        };
+      }
+      if (cleanStatus === "출고대기") {
+        return {
+          level: "ready",
+          diff: null,
+          cardClass: "bg-white border border-indigo-200/90 border-l-4 border-l-indigo-500",
+          rowClass: "hover:bg-indigo-50/60",
+          dueBoxClass: "bg-indigo-50/70 border-indigo-200 text-indigo-900",
+          badgeHtml: ""
         };
       }
       if (!dueDate) {
@@ -314,6 +324,7 @@
       }
     }
 
+    // 동일 스펙 복사 등록 (출고 현황 & 기대번호는 복사하지 않고 비움)
     function duplicateOrderRecord() {
       const form = document.getElementById("orderRecordForm");
       if (!form) return;
@@ -325,11 +336,11 @@
 
       const copied = {
         client_name: form.client_name?.value || "",
-        shipment_status: "발주접수",
+        shipment_status: "",
         receipt_date: form.receipt_date?.value || new Date().toISOString().slice(0, 10),
         due_date: form.due_date?.value || "",
         model_name: form.model_name?.value || "",
-        orderer: form.orderer?.value || state.username,
+        orderer: form.orderer?.value || "",
         pump_change: form.pump_change?.value || "",
         option_add: document.getElementById("inpOptionAdd")?.value || "",
         serial_number: "",
@@ -343,7 +354,7 @@
       state.editingRecord = copied;
       state.isCopiedOrder = true;
       render();
-      showToast("📋 동일 스펙이 복사되었습니다. 기대번호 입력 후 저장하세요.");
+      showToast("📋 복사 완료 (출고 현황·기대번호 제외). 입력 후 저장하세요.");
     }
 
     function showToast(msg) {
@@ -1423,7 +1434,7 @@
       `;
     }
 
-    // KOASIS 발주 대장 목록 렌더링 (납기일 D-1 / D-Day / 지연 색상 강조)
+    // KOASIS 발주 대장 목록 렌더링 (납기일 D-1 / D-Day / 지연 색상 강조 - 출고대기/출고완료 제외)
     function buildOrderRecordsHtml() {
       const baseFiltered = state.orderRecords.filter(matchesOrderBaseFilters);
       const filtered = getFilteredOrderRecords();
@@ -1544,7 +1555,7 @@
           </table>
         </div>
 
-        <!-- 모바일 화면: 발주 대장 카드 뷰 (D-1 / D-Day / 지연 색상 자동 변경) -->
+        <!-- 모바일 화면: 발주 대장 카드 뷰 (D-1 / D-Day / 지연 색상 자동 변경, 출고대기/출고완료 제외) -->
         <div class="md:hidden space-y-3">
           ${filtered.map(r => {
             const st = r.shipment_status || "발주접수";
@@ -2091,7 +2102,7 @@
         </div>`;
     }
 
-    // KOASIS 발주 대장 입력/수정 모달
+    // KOASIS 발주 대장 입력/수정 모달 (발주자 기본값은 '선택')
     function renderOrderFormModal() {
       const r = state.editingRecord || {};
       const today = new Date().toISOString().slice(0, 10);
@@ -2126,7 +2137,6 @@
                 let val = r[c.field_key] ?? "";
                 if (!hasPrefill && c.field_key === "receipt_date") val = today;
                 if (!hasPrefill && c.field_key === "shipment_status") val = "발주접수";
-                if (!hasPrefill && c.field_key === "orderer") val = state.username;
 
                 const fieldHtml = renderDynamicInput(c, val, ORDER_REQUIRED_KEYS.includes(c.field_key));
                 if (c.field_key === "due_date") {
