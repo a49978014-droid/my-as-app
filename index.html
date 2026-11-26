@@ -10,12 +10,17 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; background: #f3f4f6; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      background: #eef2f6;
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
 </head>
-<body class="text-gray-800">
+<body class="text-gray-800 antialiased">
   <div id="app"></div>
-  <div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-gray-900/90 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-lg z-50 transition-opacity duration-200 opacity-0 pointer-events-none"></div>
+  <div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-slate-900/95 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-xl border border-slate-700 z-50 transition-opacity duration-200 opacity-0 pointer-events-none"></div>
 
   <script>
     const SUPABASE_URL = "https://egntrwdxehqyyntjuczr.supabase.co";
@@ -174,6 +179,94 @@
       return `${diff}일`;
     }
 
+    // 납기일 D-Day 및 카드/행 테마 계산
+    function getOrderDueTheme(dueDate, shipmentStatus) {
+      const isDone = normalizeStatus(shipmentStatus) === "출고완료";
+      if (isDone) {
+        return {
+          level: "done",
+          diff: null,
+          cardClass: "bg-slate-50/90 border border-slate-200 border-l-4 border-l-emerald-500",
+          rowClass: "bg-slate-50/50 hover:bg-emerald-50/40",
+          dueBoxClass: "bg-emerald-50/80 border-emerald-200 text-emerald-900",
+          badgeHtml: `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">✓ 출고완료</span>`
+        };
+      }
+      if (!dueDate) {
+        return {
+          level: "none",
+          diff: null,
+          cardClass: "bg-white border border-gray-200/90 border-l-4 border-l-indigo-400",
+          rowClass: "hover:bg-indigo-50/60",
+          dueBoxClass: "bg-slate-50 border-slate-200 text-slate-800",
+          badgeHtml: ""
+        };
+      }
+      const now = new Date();
+      const todayZero = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueZero = new Date(String(dueDate).slice(0, 10) + "T00:00:00");
+      if (isNaN(dueZero.getTime())) {
+        return {
+          level: "none",
+          diff: null,
+          cardClass: "bg-white border border-gray-200/90 border-l-4 border-l-indigo-400",
+          rowClass: "hover:bg-indigo-50/60",
+          dueBoxClass: "bg-slate-50 border-slate-200 text-slate-800",
+          badgeHtml: ""
+        };
+      }
+      const diff = Math.round((dueZero - todayZero) / (1000 * 60 * 60 * 24));
+
+      if (diff < 0) {
+        return {
+          level: "overdue",
+          diff,
+          cardClass: "bg-red-50/95 border border-red-300 border-l-4 border-l-red-600 shadow-sm",
+          rowClass: "bg-red-50/85 hover:bg-red-100/80",
+          dueBoxClass: "bg-red-100/90 border-red-300 text-red-950",
+          badgeHtml: `<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-red-600 text-white shadow-xs">🚨 D+${Math.abs(diff)} 지연</span>`
+        };
+      }
+      if (diff === 0) {
+        return {
+          level: "dday",
+          diff,
+          cardClass: "bg-orange-50/95 border border-orange-300 border-l-4 border-l-orange-500 shadow-sm",
+          rowClass: "bg-orange-50/85 hover:bg-orange-100/80",
+          dueBoxClass: "bg-orange-100/90 border-orange-300 text-orange-950",
+          badgeHtml: `<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-orange-500 text-white shadow-xs">🔥 D-Day 오늘납기</span>`
+        };
+      }
+      if (diff === 1) {
+        return {
+          level: "d1",
+          diff,
+          cardClass: "bg-amber-50 border-2 border-amber-300 border-l-4 border-l-amber-500 shadow-sm",
+          rowClass: "bg-amber-50/90 hover:bg-amber-100/80",
+          dueBoxClass: "bg-amber-100/90 border-amber-300 text-amber-950",
+          badgeHtml: `<span class="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-amber-500 text-white shadow-xs">⏰ D-1 내일납기</span>`
+        };
+      }
+      if (diff <= 3) {
+        return {
+          level: "soon",
+          diff,
+          cardClass: "bg-white border border-indigo-200 border-l-4 border-l-indigo-500",
+          rowClass: "hover:bg-indigo-50/60",
+          dueBoxClass: "bg-indigo-50/80 border-indigo-200 text-indigo-950",
+          badgeHtml: `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-100 text-indigo-700">D-${diff}</span>`
+        };
+      }
+      return {
+        level: "normal",
+        diff,
+        cardClass: "bg-white border border-gray-200/90 border-l-4 border-l-indigo-400",
+        rowClass: "hover:bg-indigo-50/60",
+        dueBoxClass: "bg-slate-50 border-slate-200 text-slate-800",
+        badgeHtml: `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600">D-${diff}</span>`
+      };
+    }
+
     function updateModalLeadTime() {
       const form = document.getElementById("orderRecordForm");
       const el = document.getElementById("modalLeadTimeDisplay");
@@ -183,7 +276,6 @@
       el.innerText = formatLeadDaysText(rDate, dDate);
     }
 
-    // 옵션 추가 다중 선택 토글
     function toggleOrderOption(btnEl) {
       const opt = btnEl.getAttribute("data-opt");
       const hiddenInp = document.getElementById("inpOptionAdd");
@@ -222,7 +314,6 @@
       }
     }
 
-    // 동일 스펙 복사 등록 전환
     function duplicateOrderRecord() {
       const form = document.getElementById("orderRecordForm");
       if (!form) return;
@@ -241,7 +332,7 @@
         orderer: form.orderer?.value || state.username,
         pump_change: form.pump_change?.value || "",
         option_add: document.getElementById("inpOptionAdd")?.value || "",
-        serial_number: "", // 대수별 기대번호는 새로 입력하도록 비움
+        serial_number: "",
         dest_type: form.dest_type?.value || "",
         dest_address: form.dest_address?.value || "",
         dest_phone: form.dest_phone?.value || "",
@@ -351,8 +442,8 @@
 
     function setQuickStatusFilter(st) {
       if (state.activeTab === "order") {
-        if (st === "전체") {
-          state.orderStatusFilter = "전체";
+        if (st === "전체" || st === "긴급납기") {
+          state.orderStatusFilter = st;
         } else {
           const opts = getOrderCfg("shipment_status")?.options || [];
           const matched = opts.find(o => normalizeStatus(o) === normalizeStatus(st));
@@ -773,21 +864,11 @@
 
       if (state.editingRecord && state.editingRecord.id) {
         const { error } = await sb.from("order_records").update(payload).eq("id", state.editingRecord.id);
-        if (error) {
-          if (error.message.includes("order_records")) {
-            return alert("Supabase에 발주 대장 테이블(order_records)이 아직 생성되지 않았습니다.\nSupabase SQL Editor에서 1단계 SQL을 먼저 실행해 주세요!");
-          }
-          return alert("수정 오류: " + error.message);
-        }
+        if (error) return alert("수정 오류: " + error.message);
       } else {
         payload.created_by = state.username;
         const { error } = await sb.from("order_records").insert([payload]);
-        if (error) {
-          if (error.message.includes("order_records")) {
-            return alert("Supabase에 발주 대장 테이블(order_records)이 아직 생성되지 않았습니다.\nSupabase SQL Editor에서 1단계 SQL을 먼저 실행해 주세요!");
-          }
-          return alert("등록 오류: " + error.message);
-        }
+        if (error) return alert("등록 오류: " + error.message);
       }
 
       state.modalOpen = false;
@@ -960,7 +1041,12 @@
 
     function getFilteredOrderRecords() {
       const filtered = state.orderRecords.filter(r => {
-        if (state.orderStatusFilter !== "전체" && normalizeStatus(r.shipment_status) !== normalizeStatus(state.orderStatusFilter)) return false;
+        if (state.orderStatusFilter === "긴급납기") {
+          const theme = getOrderDueTheme(r.due_date, r.shipment_status);
+          if (!["overdue", "dday", "d1"].includes(theme.level)) return false;
+        } else if (state.orderStatusFilter !== "전체" && normalizeStatus(r.shipment_status) !== normalizeStatus(state.orderStatusFilter)) {
+          return false;
+        }
         return matchesOrderBaseFilters(r);
       });
 
@@ -1089,22 +1175,30 @@
 
     function statusBadge(st) {
       const clean = normalizeStatus(st);
-      if (clean === "접수" || clean === "발주접수") return "bg-blue-100 text-blue-700";
-      if (clean === "부품대기" || clean === "자재준비") return "bg-red-100 text-red-700";
-      if (clean === "타업체수리요청") return "bg-purple-100 text-purple-700";
-      if (clean === "프로그램수정대기" || clean === "출고대기") return "bg-indigo-100 text-indigo-700";
-      if (clean === "처리완료" || clean === "출고완료") return "bg-green-100 text-green-700";
-      if (clean === "처리중" || clean === "대기중" || clean === "생산중") return "bg-yellow-100 text-yellow-800";
-      if (clean === "보류") return "bg-gray-200 text-gray-700";
+      if (clean === "접수" || clean === "발주접수") return "bg-blue-100 text-blue-700 border border-blue-200";
+      if (clean === "부품대기" || clean === "자재준비") return "bg-rose-100 text-rose-700 border border-rose-200";
+      if (clean === "타업체수리요청") return "bg-purple-100 text-purple-700 border border-purple-200";
+      if (clean === "프로그램수정대기" || clean === "출고대기") return "bg-indigo-100 text-indigo-700 border border-indigo-200";
+      if (clean === "처리완료" || clean === "출고완료") return "bg-emerald-100 text-emerald-700 border border-emerald-200";
+      if (clean === "처리중" || clean === "대기중" || clean === "생산중") return "bg-amber-100 text-amber-800 border border-amber-200";
+      if (clean === "보류") return "bg-slate-200 text-slate-700 border border-slate-300";
       return "bg-purple-100 text-purple-700";
     }
 
     function urgencyBadge(ug) {
       const clean = normalizeStatus(ug);
       if (clean === "매우긴급" || clean === "최긴급") return "bg-red-600 text-white";
-      if (clean === "다소긴급" || clean === "긴급") return "bg-orange-100 text-orange-700";
+      if (clean === "다소긴급" || clean === "긴급") return "bg-orange-100 text-orange-700 border border-orange-200";
       if (clean === "낮음") return "bg-sky-100 text-sky-700";
-      return "bg-gray-100 text-gray-600";
+      return "bg-slate-100 text-slate-600";
+    }
+
+    function getAsCardBorderClass(r) {
+      if (normalizeStatus(r.status) === "처리완료") return "bg-slate-50/90 border border-slate-200 border-l-4 border-l-emerald-500";
+      const ug = normalizeStatus(r.urgency);
+      if (ug === "매우긴급" || ug === "최긴급") return "bg-red-50/40 border border-red-200 border-l-4 border-l-red-600";
+      if (ug === "다소긴급" || ug === "긴급") return "bg-orange-50/35 border border-orange-200 border-l-4 border-l-orange-500";
+      return "bg-white border border-slate-200/90 border-l-4 border-l-blue-500";
     }
 
     function paymentBadge(pt) {
@@ -1149,7 +1243,7 @@
       const fallback = DEFAULT_ORDER_CONFIGS.find(c => c.field_key === key);
       const cfg = found || fallback;
       if (!cfg) return null;
-     if (ORDER_FORCE_SELECT_KEYS.includes(key)) {
+      if (ORDER_FORCE_SELECT_KEYS.includes(key)) {
         let mergedOpts = [...(cfg.options || [])];
         if (mergedOpts.length === 0 && key === "orderer" && state.teamUsernames.length > 0) {
           mergedOpts = [...state.teamUsernames];
@@ -1170,7 +1264,7 @@
         ? (curDir === "asc" ? `<span class="text-blue-600 ml-1">▲</span>` : `<span class="text-blue-600 ml-1">▼</span>`)
         : `<span class="text-gray-300 ml-1">⇅</span>`;
       return `
-        <th onclick="toggleSort('${key}')" class="p-3 cursor-pointer select-none hover:bg-gray-100 transition ${alignRight ? "text-right" : ""} ${active ? "text-blue-700 bg-blue-50/50" : ""}">
+        <th onclick="toggleSort('${key}')" class="p-3 cursor-pointer select-none hover:bg-slate-100 transition ${alignRight ? "text-right" : ""} ${active ? "text-blue-700 bg-blue-50/70" : ""}">
           ${label}${icon}
         </th>`;
     }
@@ -1190,43 +1284,40 @@
       const activeNorm = normalizeStatus(state.statusFilter);
 
       return `
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-3.5 py-2.5 mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
-            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "전체" ? "bg-gray-800 text-white shadow-xs" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 px-3.5 py-3 mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-1.5 text-xs sm:text-sm">
+            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "전체" ? "bg-slate-800 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}">
               전체 <b>${totalCnt}</b>건
             </button>
-            <span class="text-gray-300">/</span>
-            <button type="button" onclick="setQuickStatusFilter('접수')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "접수" ? "bg-blue-600 text-white shadow-xs" : "bg-blue-50 text-blue-700 hover:bg-blue-100"}">
-              접수 <b>${receiptCnt}</b>건
+            <button type="button" onclick="setQuickStatusFilter('접수')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "접수" ? "bg-blue-600 text-white shadow-sm" : "bg-blue-50 text-blue-700 hover:bg-blue-100"}">
+              접수 <b>${receiptCnt}</b>
             </button>
-            <span class="text-gray-300">/</span>
-            <button type="button" onclick="setQuickStatusFilter('부품대기')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "부품대기" ? "bg-red-600 text-white shadow-xs" : "bg-red-50 text-red-700 hover:bg-red-100"}">
-              부품대기 <b>${partsWaitCnt}</b>건
+            <button type="button" onclick="setQuickStatusFilter('부품대기')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "부품대기" ? "bg-rose-600 text-white shadow-sm" : "bg-rose-50 text-rose-700 hover:bg-rose-100"}">
+              부품대기 <b>${partsWaitCnt}</b>
             </button>
-            <span class="text-gray-300">/</span>
-            <button type="button" onclick="setQuickStatusFilter('타업체 수리 요청')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "타업체수리요청" ? "bg-purple-600 text-white shadow-xs" : "bg-purple-50 text-purple-700 hover:bg-purple-100"}">
-              타업체 수리 요청 <b>${externalRepairCnt}</b>건
+            <button type="button" onclick="setQuickStatusFilter('타업체 수리 요청')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "타업체수리요청" ? "bg-purple-600 text-white shadow-sm" : "bg-purple-50 text-purple-700 hover:bg-purple-100"}">
+              타업체요청 <b>${externalRepairCnt}</b>
             </button>
-            <span class="text-gray-300">/</span>
-            <button type="button" onclick="setQuickStatusFilter('프로그램 수정 대기')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "프로그램수정대기" ? "bg-indigo-600 text-white shadow-xs" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}">
-              프로그램 수정 대기 <b>${programModCnt}</b>건
+            <button type="button" onclick="setQuickStatusFilter('프로그램 수정 대기')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "프로그램수정대기" ? "bg-indigo-600 text-white shadow-sm" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}">
+              프로그램수정 <b>${programModCnt}</b>
             </button>
-            <span class="text-gray-300">/</span>
-            <button type="button" onclick="setQuickStatusFilter('처리완료')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "처리완료" ? "bg-green-600 text-white shadow-xs" : "bg-green-50 text-green-700 hover:bg-green-100"}">
-              처리완료 <b>${doneCnt}</b>건
+            <button type="button" onclick="setQuickStatusFilter('처리완료')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "처리완료" ? "bg-emerald-600 text-white shadow-sm" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}">
+              처리완료 <b>${doneCnt}</b>
             </button>
           </div>
-          <div class="text-[11px] text-emerald-600 font-medium">● 실시간 동기화 연결됨</div>
+          <div class="inline-flex items-center gap-1.5 text-[11px] bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full font-semibold">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>실시간 동기화
+          </div>
         </div>
 
-        <div class="text-xs text-gray-500 mb-2 px-1 flex justify-between items-center">
-          <div>현재 목록 <b>${filtered.length}</b>건 표시 중 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
+        <div class="text-xs text-slate-500 mb-2 px-1 flex justify-between items-center">
+          <div>현재 목록 <b class="text-slate-800">${filtered.length}</b>건 표시 중 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 정렬됩니다)</span></div>
         </div>
 
         <!-- PC 화면: 표(테이블) 뷰 -->
-        <div class="hidden md:block bg-white rounded-xl shadow-sm overflow-x-auto">
+        <div class="hidden md:block bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-x-auto">
           <table class="w-full text-sm text-left whitespace-nowrap">
-            <thead class="bg-gray-50 border-b text-gray-600">
+            <thead class="bg-slate-50 border-b border-slate-200 text-slate-600">
               <tr>
                 ${renderSortTh("status", "상태")}
                 ${renderSortTh("urgency", "긴급도")}
@@ -1247,7 +1338,7 @@
                 ${renderSortTh("created_by", "작성/수정자")}
               </tr>
             </thead>
-            <tbody class="divide-y">
+            <tbody class="divide-y divide-slate-100">
               ${filtered.map(r => {
                 const pt = r.payment_type || "";
                 const ug = r.urgency || "보통";
@@ -1255,27 +1346,27 @@
                 const createdStr = formatDateTime(r.created_at);
                 const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
                 return `
-                <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-blue-50 cursor-pointer">
-                  <td class="p-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${statusBadge(r.status)}">${r.status}</span></td>
-                  <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${urgencyBadge(ug)}">${ug}</span></td>
-                  <td class="p-3 font-bold">${r.customer_name}</td>
-                  <td class="p-3">${r.receipt_date || ""}</td>
-                  <td class="p-3 text-blue-600 font-medium">${r.visit_date || "-"}</td>
+                <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-blue-50/70 cursor-pointer transition">
+                  <td class="p-3"><span class="px-2.5 py-1 rounded-full text-xs font-bold ${statusBadge(r.status)}">${r.status}</span></td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-bold ${urgencyBadge(ug)}">${ug}</span></td>
+                  <td class="p-3 font-bold text-slate-900">${r.customer_name}</td>
+                  <td class="p-3 text-slate-600">${r.receipt_date || ""}</td>
+                  <td class="p-3 text-blue-600 font-semibold">${r.visit_date || "-"}</td>
                   <td class="p-3">${r.visitor || "-"}</td>
                   <td class="p-3">${r.region_sido || ""} ${r.region_sigun || ""}</td>
-                  <td class="p-3">${r.phone || ""}</td>
-                  <td class="p-3">${r.model_name || ""} ${r.serial_number ? `<span class="text-xs text-gray-400">(${r.serial_number})</span>` : ""}</td>
-                  <td class="p-3 max-w-xs truncate">${r.symptom_detail || ""}</td>
+                  <td class="p-3 font-mono text-xs">${r.phone || ""}</td>
+                  <td class="p-3">${r.model_name || ""} ${r.serial_number ? `<span class="text-xs text-slate-400">(${r.serial_number})</span>` : ""}</td>
+                  <td class="p-3 max-w-xs truncate text-slate-700">${r.symptom_detail || ""}</td>
                   <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-semibold ${paymentBadge(pt)}">${pt || "미선택"}</span></td>
-                  <td class="p-3 text-right text-gray-600">${(r.repair_cost || 0).toLocaleString()}원</td>
-                  <td class="p-3 text-right text-gray-600">${(r.parts_cost || 0).toLocaleString()}원</td>
-                  <td class="p-3 text-right text-gray-600">${vat.toLocaleString()}원</td>
-                  <td class="p-3 text-right font-bold text-gray-900">${(r.total_cost || 0).toLocaleString()}원</td>
-                  <td class="p-3 text-xs text-gray-600">
+                  <td class="p-3 text-right text-slate-600">${(r.repair_cost || 0).toLocaleString()}원</td>
+                  <td class="p-3 text-right text-slate-600">${(r.parts_cost || 0).toLocaleString()}원</td>
+                  <td class="p-3 text-right text-slate-600">${vat.toLocaleString()}원</td>
+                  <td class="p-3 text-right font-extrabold text-slate-900">${(r.total_cost || 0).toLocaleString()}원</td>
+                  <td class="p-3 text-xs text-slate-600">
                     <div>${createdStr}</div>
-                    ${updatedStr ? `<div class="text-[11px] text-gray-400">수정: ${updatedStr}</div>` : ""}
+                    ${updatedStr ? `<div class="text-[11px] text-slate-400">수정: ${updatedStr}</div>` : ""}
                   </td>
-                  <td class="p-3 text-xs text-gray-500">작성: ${r.created_by}${r.updated_by ? ` / 수정: ${r.updated_by}` : ""}</td>
+                  <td class="p-3 text-xs text-slate-500">작성: ${r.created_by}${r.updated_by ? ` / 수정: ${r.updated_by}` : ""}</td>
                 </tr>`;
               }).join("")}
             </tbody>
@@ -1292,38 +1383,38 @@
             const fullAddr = `${r.region_sido || ""} ${r.region_sigun || ""} ${r.address_detail || ""}`.replace(/\s+/g, " ").trim();
             const safeAddr = fullAddr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
             return `
-            <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 active:bg-blue-50">
-              <div class="flex justify-between items-start mb-2">
+            <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="${getAsCardBorderClass(r)} p-4 rounded-2xl shadow-sm active:scale-[0.99] transition">
+              <div class="flex justify-between items-start mb-2.5">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${statusBadge(r.status)}">${r.status}</span>
-                  ${ug ? `<span class="px-2 py-0.5 rounded text-xs font-bold ${urgencyBadge(ug)}">${ug}</span>` : ""}
-                  <span class="font-bold text-base">${r.customer_name}</span>
+                  <span class="px-2.5 py-0.5 rounded-full text-xs font-extrabold ${statusBadge(r.status)}">${r.status}</span>
+                  ${ug ? `<span class="px-2 py-0.5 rounded-md text-[11px] font-bold ${urgencyBadge(ug)}">${ug}</span>` : ""}
+                  <span class="font-extrabold text-base text-slate-900">${r.customer_name}</span>
                 </div>
-                <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
+                <span class="text-[11px] font-medium text-slate-400 shrink-0">접수 ${r.receipt_date || ""}</span>
               </div>
-              <div class="text-sm text-gray-700 space-y-1.5">
-                <div class="flex items-start justify-between gap-2">
-                  <span class="flex-1 leading-snug">📍 ${fullAddr || "주소 미입력"}</span>
-                  ${fullAddr ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-gray-100 active:bg-blue-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded-md text-xs font-semibold">📋 복사</button>` : ""}
+              <div class="text-sm text-slate-700 space-y-2">
+                <div class="flex items-center justify-between gap-2 bg-slate-50/90 border border-slate-200/70 px-2.5 py-1.5 rounded-xl">
+                  <span class="flex-1 leading-snug text-xs text-slate-700">📍 ${fullAddr || "주소 미입력"}</span>
+                  ${fullAddr ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-white active:bg-blue-100 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-lg text-[11px] font-bold shadow-2xs">📋 복사</button>` : ""}
                 </div>
-                <div>🔧 <b>${r.model_name || "모델미입력"}</b> ${r.serial_number ? `(${r.serial_number})` : ""} · ${r.symptom_category || ""}</div>
-                ${r.dealer_name ? `<div class="text-xs text-gray-500">🏢 대리점: ${r.dealer_name} ${r.dealer_phone ? `(${r.dealer_phone})` : ""}</div>` : ""}
-                <div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">${r.symptom_detail || "증상 내용 없음"}</div>
+                <div class="text-xs sm:text-sm">🔧 <b class="text-slate-900">${r.model_name || "모델미입력"}</b> ${r.serial_number ? `<span class="text-xs text-slate-500">(${r.serial_number})</span>` : ""} · <span class="text-slate-600">${r.symptom_category || ""}</span></div>
+                ${r.dealer_name ? `<div class="text-xs text-slate-500">🏢 대리점: ${r.dealer_name} ${r.dealer_phone ? `(${r.dealer_phone})` : ""}</div>` : ""}
+                <div class="text-slate-700 bg-slate-50 border border-slate-100 p-2.5 rounded-xl text-xs leading-relaxed">${r.symptom_detail || "증상 내용 없음"}</div>
               </div>
-              <div class="mt-2.5 bg-gray-50 px-2.5 py-1.5 rounded-lg flex justify-between items-center text-xs">
+              <div class="mt-2.5 bg-blue-50/70 border border-blue-100 px-3 py-2 rounded-xl flex justify-between items-center text-xs">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="px-1.5 py-0.5 rounded font-semibold ${paymentBadge(pt)}">${pt || "미선택"}</span>
-                  <span class="text-gray-600">출장 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()} / 부가세 ${vat.toLocaleString()}</span>
+                  <span class="px-2 py-0.5 rounded-md font-bold ${paymentBadge(pt)}">${pt || "미선택"}</span>
+                  <span class="text-slate-600">출장 ${(r.repair_cost || 0).toLocaleString()} / 부품 ${(r.parts_cost || 0).toLocaleString()} / 세 ${vat.toLocaleString()}</span>
                 </div>
-                <span class="font-bold text-sm text-blue-700 shrink-0 ml-1">합계 ${(r.total_cost || 0).toLocaleString()}원</span>
+                <span class="font-extrabold text-sm text-blue-700 shrink-0 ml-1">${(r.total_cost || 0).toLocaleString()}원</span>
               </div>
-              <div class="mt-2.5 pt-2 border-t flex justify-between items-center text-xs gap-2">
-                <div class="text-gray-500 leading-relaxed">
-                  ${r.visit_date ? `<span class="text-blue-600 font-semibold">출장: ${r.visit_date}</span>${r.visitor ? ` (${r.visitor})` : ""}<br/>` : (r.visitor ? `방문자: ${r.visitor}<br/>` : "")}
-                  <span>작성일: ${createdStr}</span> · <span>작성:${r.created_by}${r.updated_by ? `/수정:${r.updated_by}` : ""}</span>
+              <div class="mt-2.5 pt-2 border-t border-slate-100 flex justify-between items-center text-xs gap-2">
+                <div class="text-slate-500 leading-relaxed">
+                  ${r.visit_date ? `<span class="text-blue-600 font-bold">출장: ${r.visit_date}</span>${r.visitor ? ` (${r.visitor})` : ""}<br/>` : (r.visitor ? `방문자: ${r.visitor}<br/>` : "")}
+                  <span class="text-[11px]">작성: ${createdStr} (${r.created_by}${r.updated_by ? ` → ${r.updated_by}` : ""})</span>
                 </div>
                 <div class="shrink-0">
-                  ${r.phone ? `<a href="tel:${r.phone}" onclick="event.stopPropagation()" class="bg-green-500 text-white px-2.5 py-1 rounded-lg font-semibold">📞 전화</a>` : ""}
+                  ${r.phone ? `<a href="tel:${r.phone}" onclick="event.stopPropagation()" class="inline-flex items-center gap-1 bg-emerald-500 active:bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold shadow-xs">📞 전화</a>` : ""}
                 </div>
               </div>
             </div>`;
@@ -1332,52 +1423,64 @@
       `;
     }
 
-    // KOASIS 발주 대장 목록 렌더링
+    // KOASIS 발주 대장 목록 렌더링 (납기일 D-1 / D-Day / 지연 색상 강조)
     function buildOrderRecordsHtml() {
       const baseFiltered = state.orderRecords.filter(matchesOrderBaseFilters);
       const filtered = getFilteredOrderRecords();
 
       const totalCnt = baseFiltered.length;
+      const urgentCnt = baseFiltered.filter(r => ["overdue", "dday", "d1"].includes(getOrderDueTheme(r.due_date, r.shipment_status).level)).length;
       const statusOpts = getOrderCfg("shipment_status")?.options || ["발주접수","자재준비","생산중","출고대기","출고완료","보류"];
       const activeNorm = normalizeStatus(state.orderStatusFilter);
 
       const getChipStyle = (st, isSelected) => {
         const clean = normalizeStatus(st);
-        if (clean === "발주접수") return isSelected ? "bg-blue-600 text-white shadow-xs" : "bg-blue-50 text-blue-700 hover:bg-blue-100";
-        if (clean === "자재준비") return isSelected ? "bg-red-600 text-white shadow-xs" : "bg-red-50 text-red-700 hover:bg-red-100";
-        if (clean === "생산중") return isSelected ? "bg-amber-600 text-white shadow-xs" : "bg-amber-50 text-amber-800 hover:bg-amber-100";
-        if (clean === "출고대기") return isSelected ? "bg-indigo-600 text-white shadow-xs" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100";
-        if (clean === "출고완료") return isSelected ? "bg-green-600 text-white shadow-xs" : "bg-green-50 text-green-700 hover:bg-green-100";
-        return isSelected ? "bg-gray-700 text-white shadow-xs" : "bg-gray-100 text-gray-700 hover:bg-gray-200";
+        if (clean === "발주접수") return isSelected ? "bg-blue-600 text-white shadow-sm" : "bg-blue-50 text-blue-700 hover:bg-blue-100";
+        if (clean === "자재준비") return isSelected ? "bg-rose-600 text-white shadow-sm" : "bg-rose-50 text-rose-700 hover:bg-rose-100";
+        if (clean === "생산중") return isSelected ? "bg-amber-600 text-white shadow-sm" : "bg-amber-50 text-amber-800 hover:bg-amber-100";
+        if (clean === "출고대기") return isSelected ? "bg-indigo-600 text-white shadow-sm" : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100";
+        if (clean === "출고완료") return isSelected ? "bg-emerald-600 text-white shadow-sm" : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100";
+        return isSelected ? "bg-slate-700 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200";
       };
 
       return `
-        <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-3.5 py-2.5 mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
-            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-2.5 py-1 rounded-lg font-semibold transition ${activeNorm === "전체" ? "bg-gray-800 text-white shadow-xs" : "bg-gray-100 text-gray-700 hover:bg-gray-200"}">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 px-3.5 py-3 mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-1.5 text-xs sm:text-sm">
+            <button type="button" onclick="setQuickStatusFilter('전체')" class="px-3 py-1.5 rounded-xl font-bold transition ${activeNorm === "전체" ? "bg-slate-800 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}">
               전체 <b>${totalCnt}</b>건
             </button>
+            ${urgentCnt > 0 ? `
+              <button type="button" onclick="setQuickStatusFilter('긴급납기')" class="px-3 py-1.5 rounded-xl font-extrabold transition border ${state.orderStatusFilter === "긴급납기" ? "bg-amber-500 text-white border-amber-600 shadow-sm" : "bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100"}">
+                ⏰ 납기임박(D-1/지연) <b>${urgentCnt}</b>건
+              </button>
+            ` : ""}
             ${statusOpts.map(st => {
               const cnt = baseFiltered.filter(r => normalizeStatus(r.shipment_status) === normalizeStatus(st)).length;
               const isSelected = activeNorm === normalizeStatus(st);
               return `
-                <span class="text-gray-300">/</span>
-                <button type="button" onclick="setQuickStatusFilter('${st.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded-lg font-semibold transition ${getChipStyle(st, isSelected)}">
-                  ${st} <b>${cnt}</b>건
+                <button type="button" onclick="setQuickStatusFilter('${st.replace(/'/g, "\\'")}')" class="px-3 py-1.5 rounded-xl font-bold transition ${getChipStyle(st, isSelected)}">
+                  ${st} <b>${cnt}</b>
                 </button>`;
             }).join("")}
           </div>
-          <div class="text-[11px] text-emerald-600 font-medium">● 실시간 동기화 연결됨</div>
+          <div class="inline-flex items-center gap-1.5 text-[11px] bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full font-semibold">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>실시간 동기화
+          </div>
         </div>
 
-        <div class="text-xs text-gray-500 mb-2 px-1 flex justify-between items-center">
-          <div>현재 발주 목록 <b>${filtered.length}</b>건 표시 중 <span class="hidden md:inline">(표 맨 윗줄의 항목 제목을 누르면 해당 항목 기준으로 정렬됩니다)</span></div>
+        <div class="text-xs text-slate-500 mb-2 px-1 flex flex-wrap justify-between items-center gap-1">
+          <div>현재 발주 목록 <b class="text-slate-800">${filtered.length}</b>건 표시 중</div>
+          <div class="flex items-center gap-2 text-[11px]">
+            <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-xs bg-amber-300 border border-amber-500"></span>D-1 내일납기</span>
+            <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-xs bg-orange-300 border border-orange-500"></span>오늘납기</span>
+            <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-xs bg-red-300 border border-red-600"></span>납기지연</span>
+          </div>
         </div>
 
         <!-- PC 화면: 발주 대장 테이블 뷰 -->
-        <div class="hidden md:block bg-white rounded-xl shadow-sm overflow-x-auto">
+        <div class="hidden md:block bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-x-auto">
           <table class="w-full text-sm text-left whitespace-nowrap">
-            <thead class="bg-gray-50 border-b text-gray-600">
+            <thead class="bg-slate-50 border-b border-slate-200 text-slate-600">
               <tr>
                 ${renderSortTh("shipment_status", "출고 현황")}
                 ${renderSortTh("client_name", "발주처")}
@@ -1397,35 +1500,43 @@
                 ${renderSortTh("updated_at", "최종 편집 일시 / 편집자")}
               </tr>
             </thead>
-            <tbody class="divide-y">
+            <tbody class="divide-y divide-slate-100">
               ${filtered.map(r => {
                 const st = r.shipment_status || "발주접수";
                 const leadText = formatLeadDaysText(r.receipt_date, r.due_date);
                 const createdStr = formatDateTime(r.created_at);
                 const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
+                const theme = getOrderDueTheme(r.due_date, st);
                 return `
-                <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="hover:bg-indigo-50/70 cursor-pointer">
-                  <td class="p-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${statusBadge(st)}">${st}</span></td>
-                  <td class="p-3 font-bold text-gray-900">${r.client_name || ""}</td>
-                  <td class="p-3 font-medium">${r.model_name || ""}</td>
-                  <td class="p-3 text-gray-600">${r.serial_number || "-"}</td>
-                  <td class="p-3">${r.receipt_date || ""}</td>
-                  <td class="p-3 text-blue-600 font-semibold">${r.due_date || "-"}</td>
-                  <td class="p-3"><span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">${leadText}</span></td>
+                <tr onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="${theme.rowClass} cursor-pointer transition">
+                  <td class="p-3"><span class="px-2.5 py-1 rounded-full text-xs font-bold ${statusBadge(st)}">${st}</span></td>
+                  <td class="p-3 font-bold text-slate-900">${r.client_name || ""}</td>
+                  <td class="p-3 font-semibold text-indigo-950">${r.model_name || ""}</td>
+                  <td class="p-3 font-mono text-xs text-slate-600">${r.serial_number || "-"}</td>
+                  <td class="p-3 text-slate-600">${r.receipt_date || ""}</td>
+                  <td class="p-3">
+                    <div class="flex items-center gap-1.5">
+                      <span class="font-bold ${theme.level === 'overdue' ? 'text-red-700' : theme.level === 'dday' ? 'text-orange-700' : theme.level === 'd1' ? 'text-amber-800' : 'text-blue-700'}">${r.due_date || "-"}</span>
+                      ${theme.badgeHtml}
+                    </div>
+                  </td>
+                  <td class="p-3"><span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-semibold">${leadText}</span></td>
                   <td class="p-3">${r.orderer || "-"}</td>
                   <td class="p-3">${r.pump_change || "-"}</td>
-                  <td class="p-3">${r.option_add || "-"}</td>
+                  <td class="p-3">
+                    ${r.option_add ? r.option_add.split(",").map(o => `<span class="inline-block mr-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-xs font-semibold">${o.trim()}</span>`).join("") : "-"}
+                  </td>
                   <td class="p-3">${r.dest_type || "-"}</td>
                   <td class="p-3 max-w-xs truncate">${r.dest_address || "-"}</td>
-                  <td class="p-3">${r.dest_phone || "-"}</td>
-                  <td class="p-3 max-w-xs truncate text-gray-600">${r.remarks || ""}</td>
-                  <td class="p-3 text-xs text-gray-600">
+                  <td class="p-3 font-mono text-xs">${r.dest_phone || "-"}</td>
+                  <td class="p-3 max-w-xs truncate text-slate-600">${r.remarks || ""}</td>
+                  <td class="p-3 text-xs text-slate-600">
                     <div>${createdStr}</div>
-                    <div class="text-[11px] text-gray-400">생성: ${r.created_by || "-"}</div>
+                    <div class="text-[11px] text-slate-400">생성: ${r.created_by || "-"}</div>
                   </td>
-                  <td class="p-3 text-xs text-gray-600">
+                  <td class="p-3 text-xs text-slate-600">
                     <div>${updatedStr || "-"}</div>
-                    ${r.updated_by ? `<div class="text-[11px] text-gray-400">편집: ${r.updated_by}</div>` : ""}
+                    ${r.updated_by ? `<div class="text-[11px] text-slate-400">편집: ${r.updated_by}</div>` : ""}
                   </td>
                 </tr>`;
               }).join("")}
@@ -1433,7 +1544,7 @@
           </table>
         </div>
 
-        <!-- 모바일 화면: 발주 대장 카드 뷰 -->
+        <!-- 모바일 화면: 발주 대장 카드 뷰 (D-1 / D-Day / 지연 색상 자동 변경) -->
         <div class="md:hidden space-y-3">
           ${filtered.map(r => {
             const st = r.shipment_status || "발주접수";
@@ -1441,43 +1552,60 @@
             const createdStr = formatDateTime(r.created_at);
             const updatedStr = r.updated_at && r.updated_by ? formatDateTime(r.updated_at) : "";
             const safeAddr = (r.dest_address || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+            const theme = getOrderDueTheme(r.due_date, st);
             return `
-            <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 active:bg-indigo-50">
-              <div class="flex justify-between items-start mb-2">
+            <div onclick='openForm(${JSON.stringify(r).replace(/'/g, "&#39;")})' class="${theme.cardClass} p-4 rounded-2xl shadow-sm active:scale-[0.99] transition">
+              <div class="flex justify-between items-start gap-2 mb-2.5">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="px-2.5 py-0.5 rounded-full text-xs font-bold ${statusBadge(st)}">${st}</span>
-                  <span class="font-bold text-base">${r.client_name || "발주처 미입력"}</span>
+                  <span class="px-2.5 py-0.5 rounded-full text-xs font-extrabold ${statusBadge(st)}">${st}</span>
+                  <span class="font-extrabold text-base text-slate-900">${r.client_name || "발주처 미입력"}</span>
                 </div>
-                <span class="text-xs text-gray-400">접수 ${r.receipt_date || ""}</span>
+                <div class="shrink-0 flex flex-col items-end gap-1">
+                  ${theme.badgeHtml}
+                  <span class="text-[11px] text-slate-400 font-medium">접수 ${r.receipt_date || ""}</span>
+                </div>
               </div>
 
-              <div class="text-sm text-gray-700 space-y-1.5">
-                <div>🏭 <b>${r.model_name || "모델미입력"}</b> ${r.serial_number ? `<span class="text-xs text-gray-500">(${r.serial_number})</span>` : ""}</div>
-                <div class="flex flex-wrap items-center gap-2 text-xs bg-blue-50/70 text-blue-900 px-2.5 py-1.5 rounded-lg">
-                  <span>📅 납기일: <b>${r.due_date || "미정"}</b></span>
-                  <span>·</span>
-                  <span>⏱️ 소요 예정일: <b>${leadText}</b></span>
-                  ${r.orderer ? `<span>· 발주자: <b>${r.orderer}</b></span>` : ""}
+              <div class="text-sm text-slate-700 space-y-2">
+                <div class="flex items-center justify-between">
+                  <div>🏭 <b class="text-slate-900">${r.model_name || "모델미입력"}</b> ${r.serial_number ? `<span class="text-xs font-mono bg-white/80 border border-slate-200 px-1.5 py-0.5 rounded text-slate-600 ml-1">${r.serial_number}</span>` : ""}</div>
                 </div>
+
+                <div class="grid grid-cols-3 gap-1.5 text-xs ${theme.dueBoxClass} border px-3 py-2 rounded-xl">
+                  <div>
+                    <div class="text-[10px] opacity-75 font-semibold">납기일</div>
+                    <div class="font-extrabold text-sm mt-0.5">${r.due_date || "미정"}</div>
+                  </div>
+                  <div class="border-x border-current/15 px-2">
+                    <div class="text-[10px] opacity-75 font-semibold">소요 예정일</div>
+                    <div class="font-bold mt-0.5">${leadText}</div>
+                  </div>
+                  <div class="pl-1">
+                    <div class="text-[10px] opacity-75 font-semibold">발주자</div>
+                    <div class="font-bold mt-0.5">${r.orderer || "-"}</div>
+                  </div>
+                </div>
+
                 <div class="flex flex-wrap gap-1.5 text-xs">
-                  ${r.pump_change ? `<span class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">펌프: <b>${r.pump_change}</b></span>` : ""}
-                  ${r.option_add ? `<span class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">옵션: <b>${r.option_add}</b></span>` : ""}
-                  ${r.dest_type ? `<span class="bg-indigo-50 px-2 py-0.5 rounded text-indigo-700">출고지: <b>${r.dest_type}</b></span>` : ""}
+                  ${r.pump_change ? `<span class="bg-white/90 border border-slate-200 px-2.5 py-1 rounded-lg text-slate-700">펌프: <b>${r.pump_change}</b></span>` : ""}
+                  ${r.dest_type ? `<span class="bg-indigo-100/80 text-indigo-800 px-2.5 py-1 rounded-lg font-semibold">출고: ${r.dest_type}</span>` : ""}
+                  ${r.option_add ? r.option_add.split(",").map(o => `<span class="bg-emerald-100/80 text-emerald-800 px-2.5 py-1 rounded-lg font-semibold">+ ${o.trim()}</span>`).join("") : ""}
                 </div>
-                <div class="flex items-start justify-between gap-2 pt-0.5">
-                  <span class="flex-1 leading-snug text-xs">📍 ${r.dest_address || "출고지 주소 미입력"}</span>
-                  ${r.dest_address ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-gray-100 active:bg-blue-100 text-gray-700 border border-gray-200 px-2 py-0.5 rounded-md text-xs font-semibold">📋 복사</button>` : ""}
+
+                <div class="flex items-center justify-between gap-2 bg-white/85 border border-slate-200/80 px-2.5 py-1.5 rounded-xl">
+                  <span class="flex-1 leading-snug text-xs text-slate-700">📍 ${r.dest_address || "출고지 주소 미입력"}</span>
+                  ${r.dest_address ? `<button type="button" onclick="event.stopPropagation(); copyText('${safeAddr}')" class="shrink-0 bg-indigo-50 active:bg-indigo-100 text-indigo-700 border border-indigo-200 px-2.5 py-1 rounded-lg text-[11px] font-bold">📋 복사</button>` : ""}
                 </div>
-                ${r.remarks ? `<div class="text-gray-600 bg-gray-50 p-2 rounded text-xs">📝 ${r.remarks}</div>` : ""}
+                ${r.remarks ? `<div class="text-slate-700 bg-white/80 border border-slate-200/60 p-2.5 rounded-xl text-xs">📝 ${r.remarks}</div>` : ""}
               </div>
 
-              <div class="mt-2.5 pt-2 border-t flex justify-between items-center text-xs gap-2">
-                <div class="text-gray-500 leading-relaxed">
+              <div class="mt-2.5 pt-2 border-t border-black/5 flex justify-between items-center text-xs gap-2">
+                <div class="text-slate-500 leading-relaxed text-[11px]">
                   <div>생성: ${createdStr} (${r.created_by || "-"})</div>
                   ${updatedStr ? `<div>편집: ${updatedStr} (${r.updated_by})</div>` : ""}
                 </div>
                 <div class="shrink-0">
-                  ${r.dest_phone ? `<a href="tel:${r.dest_phone}" onclick="event.stopPropagation()" class="bg-green-500 text-white px-2.5 py-1 rounded-lg font-semibold">📞 전화</a>` : ""}
+                  ${r.dest_phone ? `<a href="tel:${r.dest_phone}" onclick="event.stopPropagation()" class="inline-flex items-center gap-1 bg-emerald-500 active:bg-emerald-600 text-white px-3 py-1.5 rounded-xl font-bold shadow-xs">📞 전화</a>` : ""}
                 </div>
               </div>
             </div>`;
@@ -1498,25 +1626,26 @@
       if (!state.user) {
         const saved = getSavedCredentials();
         app.innerHTML = `
-          <div class="min-h-screen flex items-center justify-center p-4">
-            <form onsubmit="handleLogin(event)" class="bg-white p-8 rounded-2xl shadow-lg w-full max-w-sm space-y-5">
+          <div class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950">
+            <form onsubmit="handleLogin(event)" class="bg-white/95 backdrop-blur p-8 rounded-3xl shadow-2xl w-full max-w-sm space-y-5 border border-white/20">
               <div class="text-center">
-                <h1 class="text-2xl font-bold text-gray-900">KOASIS 통합 관리 대장</h1>
-                <p class="text-sm text-gray-500 mt-1">팀원 이름으로 로그인하세요</p>
+                <div class="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-black text-xl shadow-md mb-3">K</div>
+                <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight">KOASIS 통합 관리 대장</h1>
+                <p class="text-xs text-slate-500 mt-1">팀원 이름으로 로그인하세요</p>
               </div>
               <div>
-                <label class="block text-sm font-medium mb-1">아이디 (팀원 이름)</label>
-                <input id="loginName" name="username" autocomplete="username" type="text" value="${saved ? saved.username : ""}" placeholder="예: 박종민" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+                <label class="block text-xs font-bold text-slate-700 mb-1">아이디 (팀원 이름)</label>
+                <input id="loginName" name="username" autocomplete="username" type="text" value="${saved ? saved.username : ""}" placeholder="예: 박종민" class="w-full border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" required />
               </div>
               <div>
-                <label class="block text-sm font-medium mb-1">비밀번호</label>
-                <input id="loginPw" name="password" autocomplete="current-password" type="password" value="${saved ? saved.password : ""}" placeholder="비밀번호 입력" class="w-full border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+                <label class="block text-xs font-bold text-slate-700 mb-1">비밀번호</label>
+                <input id="loginPw" name="password" autocomplete="current-password" type="password" value="${saved ? saved.password : ""}" placeholder="비밀번호 입력" class="w-full border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" required />
               </div>
-              <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                <input id="rememberLogin" type="checkbox" ${saved ? "checked" : ""} class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+              <label class="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer select-none">
+                <input id="rememberLogin" type="checkbox" ${saved ? "checked" : ""} class="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
                 <span>아이디 · 비밀번호 저장</span>
               </label>
-              <button type="submit" class="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg hover:bg-blue-700">로그인</button>
+              <button type="submit" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold py-3 rounded-xl shadow-md transition">로그인</button>
             </form>
           </div>`;
         return;
@@ -1526,25 +1655,29 @@
       const exportRows = state.exportModalOpen ? getExportTargetRecords() : [];
 
       const headerHtml = `
-        <header class="bg-white border-b sticky top-0 z-20">
-          <div class="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
-            <div class="flex items-center gap-2 flex-wrap">
-              <nav class="inline-flex bg-gray-100 p-1 rounded-xl border border-gray-200">
-                <button type="button" onclick="switchTab('as')" class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition ${!isOrder ? "bg-blue-600 text-white shadow-xs" : "text-gray-600 hover:text-gray-900"}">
-                  AS 접수 대장
+        <header class="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white sticky top-0 z-20 shadow-md">
+          <div class="max-w-7xl mx-auto px-3.5 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2.5">
+            <div class="flex items-center gap-2.5 flex-wrap">
+              <div class="flex items-center gap-2 mr-1">
+                <span class="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 text-slate-950 font-black flex items-center justify-center text-sm shadow-xs">K</span>
+                <span class="hidden lg:inline font-extrabold text-base tracking-tight text-white">KOASIS</span>
+              </div>
+              <nav class="inline-flex bg-slate-950/60 p-1 rounded-xl border border-slate-700/80">
+                <button type="button" onclick="switchTab('as')" class="px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-extrabold transition ${!isOrder ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white"}">
+                  🛠️ AS 접수 대장
                 </button>
-                <button type="button" onclick="switchTab('order')" class="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition ${isOrder ? "bg-indigo-600 text-white shadow-xs" : "text-gray-600 hover:text-gray-900"}">
-                  KOASIS 발주 대장
+                <button type="button" onclick="switchTab('order')" class="px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-extrabold transition ${isOrder ? "bg-indigo-600 text-white shadow-sm" : "text-slate-300 hover:text-white"}">
+                  📦 KOASIS 발주 대장
                 </button>
               </nav>
-              <span class="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full font-medium">${state.username}님</span>
+              <span class="text-xs bg-slate-800 text-emerald-300 border border-slate-700 px-2.5 py-1 rounded-full font-bold">${state.username}님</span>
             </div>
-            <div class="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm">
-              <button id="refreshBtn" onclick="manualRefresh()" class="px-2.5 sm:px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium">🔄 새로고침</button>
-              <button onclick="state.configModalOpen=true;render()" class="px-2.5 sm:px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium">⚙️ 항목관리</button>
-              <button onclick="openExportModal()" class="px-2.5 sm:px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg font-medium">📥 엑셀다운</button>
-              <button onclick="state.pwModalOpen=true;render()" class="px-2.5 sm:px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg">비번변경</button>
-              <button onclick="handleLogout()" class="px-2 py-1.5 text-gray-500 hover:text-red-600">로그아웃</button>
+            <div class="flex items-center gap-1.5 text-xs">
+              <button id="refreshBtn" onclick="manualRefresh()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 rounded-xl font-semibold transition">🔄 새로고침</button>
+              <button onclick="state.configModalOpen=true;render()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 rounded-xl font-semibold transition">⚙️ 항목관리</button>
+              <button onclick="openExportModal()" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold shadow-xs transition">📥 엑셀다운</button>
+              <button onclick="state.pwModalOpen=true;render()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-medium transition">비번변경</button>
+              <button onclick="handleLogout()" class="px-2 py-1.5 text-slate-400 hover:text-rose-400 font-medium transition">로그아웃</button>
             </div>
           </div>
         </header>
@@ -1570,50 +1703,50 @@
         const curOrderSortVal = `${state.orderSortKey}:${state.orderSortDir}`;
 
         mainHtml = `
-          <main class="max-w-7xl mx-auto p-4 pb-24">
-            <div class="bg-white p-3 rounded-xl shadow-sm mb-3 space-y-2.5">
+          <main class="max-w-7xl mx-auto p-3.5 sm:p-4 pb-24">
+            <div class="bg-white p-3.5 rounded-2xl shadow-sm border border-slate-200/80 mb-3 space-y-2.5">
               <div class="flex gap-2 items-center">
-                <input id="searchInput" type="text" value="${state.orderSearch}" oninput="handleSearchInput(this.value)" placeholder="발주처, 모델명, 기대번호, 발주자, 출고지 주소, 전화번호(하이픈 없이도 가능) 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>
-                <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700">+ 새 발주 등록</button>
+                <input id="searchInput" type="text" value="${state.orderSearch}" oninput="handleSearchInput(this.value)" placeholder="발주처, 모델명, 기대번호, 발주자, 출고지 주소, 전화번호 검색..." class="flex-1 border border-slate-300 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold">초기화</button>
+                <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white px-4 py-2 rounded-xl text-sm font-extrabold shadow-sm">+ 새 발주 등록</button>
               </div>
 
               <!-- 날짜 구간 검색 바 -->
-              <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100 text-sm">
-                <select onchange="state.orderDateFilterKey=this.value;render()" class="border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white font-medium text-gray-700">
+              <div class="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200/70 text-sm">
+                <select onchange="state.orderDateFilterKey=this.value;render()" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm bg-white font-semibold text-slate-700">
                   <option value="receipt_date" ${state.orderDateFilterKey==="receipt_date"?"selected":""}>기간: 접수일</option>
                   <option value="due_date" ${state.orderDateFilterKey==="due_date"?"selected":""}>기간: 납기일</option>
                   <option value="created_at" ${state.orderDateFilterKey==="created_at"?"selected":""}>기간: 생성일시</option>
                 </select>
                 <div class="flex items-center gap-1.5 flex-1 min-w-[240px]">
-                  <input type="date" value="${state.orderDateFrom}" onchange="state.orderDateFrom=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                  <span class="text-gray-400 font-bold">~</span>
-                  <input type="date" value="${state.orderDateTo}" onchange="state.orderDateTo=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                  ${(state.orderDateFrom || state.orderDateTo) ? `<button type="button" onclick="state.orderDateFrom='';state.orderDateTo='';render()" class="px-2 py-1.5 text-xs bg-white border rounded-lg text-gray-500 hover:text-red-600">해제</button>` : ""}
+                  <input type="date" value="${state.orderDateFrom}" onchange="state.orderDateFrom=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  <span class="text-slate-400 font-bold">~</span>
+                  <input type="date" value="${state.orderDateTo}" onchange="state.orderDateTo=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  ${(state.orderDateFrom || state.orderDateTo) ? `<button type="button" onclick="state.orderDateFrom='';state.orderDateTo='';render()" class="px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-500 hover:text-red-600 font-semibold">해제</button>` : ""}
                 </div>
               </div>
 
               <!-- 항목 필터 바 -->
               <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
-                <select onchange="state.orderStatusFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.orderStatusFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.orderStatusFilter==="전체"?"selected":""}>출고 현황: 전체</option>
+                  <option value="긴급납기" ${state.orderStatusFilter==="긴급납기"?"selected":""}>⏰ 납기임박(D-1/지연)</option>
                   ${ordStatusOpts.map(o => `<option value="${o}" ${state.orderStatusFilter===o?"selected":""}>${o}</option>`).join("")}
                 </select>
-                <select onchange="state.orderModelFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.orderModelFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.orderModelFilter==="전체"?"selected":""}>모델명: 전체</option>
                   ${ordModelOpts.map(m => `<option value="${m}" ${state.orderModelFilter===m?"selected":""}>${m}</option>`).join("")}
                 </select>
-                <select onchange="state.orderOrdererFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.orderOrdererFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.orderOrdererFilter==="전체"?"selected":""}>발주자: 전체</option>
                   ${ordOrdererOpts.map(v => `<option value="${v}" ${state.orderOrdererFilter===v?"selected":""}>${v}</option>`).join("")}
                 </select>
-                <select onchange="state.orderDestTypeFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.orderDestTypeFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.orderDestTypeFilter==="전체"?"selected":""}>출고지 유형: 전체</option>
                   ${ordDestOpts.map(d => `<option value="${d}" ${state.orderDestTypeFilter===d?"selected":""}>${d}</option>`).join("")}
                 </select>
-                <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-indigo-200 rounded-lg px-2.5 py-2 text-sm bg-indigo-50/40 font-medium text-indigo-900">
+                <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-indigo-200 rounded-xl px-2.5 py-2 text-sm bg-indigo-50/60 font-bold text-indigo-900">
                   <option value="created_at:desc" ${curOrderSortVal==="created_at:desc"?"selected":""}>정렬: 생성일시 최신순 ▼</option>
-                  <option value="created_at:asc" ${curOrderSortVal==="created_at:asc"?"selected":""}>정렬: 생성일시 오래된순 ▲</option>
                   <option value="due_date:asc" ${curOrderSortVal==="due_date:asc"?"selected":""}>정렬: 납기일 빠른순 ▲</option>
                   <option value="due_date:desc" ${curOrderSortVal==="due_date:desc"?"selected":""}>정렬: 납기일 늦은순 ▼</option>
                   <option value="receipt_date:desc" ${curOrderSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일 최신순 ▼</option>
@@ -1627,7 +1760,7 @@
             <div id="recordsArea">${buildOrderRecordsHtml()}</div>
           </main>
 
-          <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-indigo-600 text-white px-5 py-3.5 rounded-full shadow-xl font-bold text-base z-20">+ 발주 등록</button>
+          <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-gradient-to-r from-indigo-600 to-blue-600 text-white px-5 py-3.5 rounded-full shadow-xl font-extrabold text-sm z-20 active:scale-95 transition">+ 발주 등록</button>
         `;
       } else {
         const statusOpts = getCfg("status")?.options || ["접수","처리중","부품대기","타업체 수리 요청","프로그램 수정 대기","처리완료","보류"];
@@ -1648,61 +1781,55 @@
         const currentSortVal = `${state.sortKey}:${state.sortDir}`;
 
         mainHtml = `
-          <main class="max-w-7xl mx-auto p-4 pb-24">
-            <div class="bg-white p-3 rounded-xl shadow-sm mb-3 space-y-2.5">
+          <main class="max-w-7xl mx-auto p-3.5 sm:p-4 pb-24">
+            <div class="bg-white p-3.5 rounded-2xl shadow-sm border border-slate-200/80 mb-3 space-y-2.5">
               <div class="flex gap-2 items-center">
-                <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처(하이픈 없이도 가능), 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold">초기화</button>
-                <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">+ 새 AS 접수</button>
+                <input id="searchInput" type="text" value="${state.search}" oninput="handleSearchInput(this.value)" placeholder="고객명, 연락처, 모델, 기대번호, 대리점, 방문자, 지역 검색..." class="flex-1 border border-slate-300 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <button id="resetFilterBtn" onclick="resetFilters()" style="display:${hasAnyActiveFilter() ? "inline-flex" : "none"}" class="shrink-0 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold">초기화</button>
+                <button onclick="openForm()" class="hidden md:inline-flex shrink-0 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-extrabold shadow-sm">+ 새 AS 접수</button>
               </div>
 
               <!-- 날짜 구간 검색 바 -->
-              <div class="flex flex-wrap items-center gap-2 bg-gray-50 p-2 rounded-lg border border-gray-100 text-sm">
-                <select onchange="state.dateFilterKey=this.value;render()" class="border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white font-medium text-gray-700">
+              <div class="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200/70 text-sm">
+                <select onchange="state.dateFilterKey=this.value;render()" class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm bg-white font-semibold text-slate-700">
                   <option value="receipt_date" ${state.dateFilterKey==="receipt_date"?"selected":""}>기간: 접수일자</option>
                   <option value="completed_date" ${state.dateFilterKey==="completed_date"?"selected":""}>기간: 처리완료일</option>
                   <option value="visit_date" ${state.dateFilterKey==="visit_date"?"selected":""}>기간: 출장예정일</option>
                   <option value="created_at" ${state.dateFilterKey==="created_at"?"selected":""}>기간: 작성일</option>
                 </select>
                 <div class="flex items-center gap-1.5 flex-1 min-w-[240px]">
-                  <input type="date" value="${state.dateFrom}" onchange="state.dateFrom=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                  <span class="text-gray-400 font-bold">~</span>
-                  <input type="date" value="${state.dateTo}" onchange="state.dateTo=this.value;render()" class="flex-1 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
-                  ${(state.dateFrom || state.dateTo) ? `<button type="button" onclick="state.dateFrom='';state.dateTo='';render()" class="px-2 py-1.5 text-xs bg-white border rounded-lg text-gray-500 hover:text-red-600">해제</button>` : ""}
+                  <input type="date" value="${state.dateFrom}" onchange="state.dateFrom=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  <span class="text-slate-400 font-bold">~</span>
+                  <input type="date" value="${state.dateTo}" onchange="state.dateTo=this.value;render()" class="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white" />
+                  ${(state.dateFrom || state.dateTo) ? `<button type="button" onclick="state.dateFrom='';state.dateTo='';render()" class="px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-500 hover:text-red-600 font-semibold">해제</button>` : ""}
                 </div>
               </div>
 
               <!-- 항목 필터 바 -->
               <div class="grid grid-cols-2 md:flex md:flex-wrap gap-2">
-                <select onchange="state.statusFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.statusFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.statusFilter==="전체"?"selected":""}>상태: 전체</option>
                   ${statusOpts.map(o => `<option value="${o}" ${state.statusFilter===o?"selected":""}>${o}</option>`).join("")}
                 </select>
-                <select onchange="state.sidoFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.sidoFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.sidoFilter==="전체"?"selected":""}>지역: 전체</option>
                   ${sidoOpts.map(s => `<option value="${s}" ${state.sidoFilter===s?"selected":""}>${s}</option>`).join("")}
                 </select>
-                <select onchange="state.modelFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.modelFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.modelFilter==="전체"?"selected":""}>모델명: 전체</option>
                   ${modelOpts.map(m => `<option value="${m}" ${state.modelFilter===m?"selected":""}>${m}</option>`).join("")}
                 </select>
-                <select onchange="state.visitorFilter=this.value;render()" class="border rounded-lg px-2.5 py-2 text-sm bg-white">
+                <select onchange="state.visitorFilter=this.value;render()" class="border border-slate-300 rounded-xl px-2.5 py-2 text-sm bg-white">
                   <option value="전체" ${state.visitorFilter==="전체"?"selected":""}>방문자: 전체</option>
                   ${visitorOpts.map(v => `<option value="${v}" ${state.visitorFilter===v?"selected":""}>${v}</option>`).join("")}
                 </select>
-                <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-blue-200 rounded-lg px-2.5 py-2 text-sm bg-blue-50/40 font-medium text-blue-900">
+                <select onchange="setMobileSort(this.value)" class="col-span-2 md:hidden border border-blue-200 rounded-xl px-2.5 py-2 text-sm bg-blue-50/60 font-bold text-blue-900">
                   <option value="created_at:desc" ${currentSortVal==="created_at:desc"?"selected":""}>정렬: 작성일 최신순 ▼</option>
-                  <option value="created_at:asc" ${currentSortVal==="created_at:asc"?"selected":""}>정렬: 작성일 오래된순 ▲</option>
                   <option value="receipt_date:desc" ${currentSortVal==="receipt_date:desc"?"selected":""}>정렬: 접수일자 최신순 ▼</option>
-                  <option value="receipt_date:asc" ${currentSortVal==="receipt_date:asc"?"selected":""}>정렬: 접수일자 오래된순 ▲</option>
                   <option value="visit_date:asc" ${currentSortVal==="visit_date:asc"?"selected":""}>정렬: 출장예정일 빠른순 ▲</option>
-                  <option value="visit_date:desc" ${currentSortVal==="visit_date:desc"?"selected":""}>정렬: 출장예정일 늦은순 ▼</option>
                   <option value="urgency:desc" ${currentSortVal==="urgency:desc"?"selected":""}>정렬: 긴급도 높은순 ▼</option>
                   <option value="status:asc" ${currentSortVal==="status:asc"?"selected":""}>정렬: 상태순 ▲</option>
                   <option value="customer_name:asc" ${currentSortVal==="customer_name:asc"?"selected":""}>정렬: 고객명 가나다순 ▲</option>
-                  <option value="region_sido:asc" ${currentSortVal==="region_sido:asc"?"selected":""}>정렬: 지역순 ▲</option>
-                  <option value="model_name:asc" ${currentSortVal==="model_name:asc"?"selected":""}>정렬: 모델명순 ▲</option>
-                  <option value="visitor:asc" ${currentSortVal==="visitor:asc"?"selected":""}>정렬: 방문자순 ▲</option>
                   <option value="total_cost:desc" ${currentSortVal==="total_cost:desc"?"selected":""}>정렬: 합계금액 높은순 ▼</option>
                 </select>
               </div>
@@ -1711,7 +1838,7 @@
             <div id="recordsArea">${buildRecordsHtml()}</div>
           </main>
 
-          <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-blue-600 text-white px-5 py-3.5 rounded-full shadow-xl font-bold text-base z-20">+ AS 접수</button>
+          <button onclick="openForm()" class="md:hidden fixed bottom-5 right-5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-5 py-3.5 rounded-full shadow-xl font-extrabold text-sm z-20 active:scale-95 transition">+ AS 접수</button>
         `;
       }
 
@@ -1727,23 +1854,23 @@
 
         <!-- 엑셀 기간 및 형식 선택 모달 창 -->
         ${state.exportModalOpen ? `
-          <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div class="bg-white rounded-2xl p-5 w-full max-w-md space-y-4">
-              <div class="flex justify-between items-center border-b pb-2">
-                <h2 class="font-bold text-lg">${isOrder ? "KOASIS 발주 대장" : "AS 접수 대장"} 엑셀 다운로드</h2>
-                <button onclick="state.exportModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
+          <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <div class="bg-white rounded-3xl p-5 w-full max-w-md space-y-4 shadow-2xl">
+              <div class="flex justify-between items-center border-b pb-2.5">
+                <h2 class="font-extrabold text-lg">${isOrder ? "KOASIS 발주 대장" : "AS 접수 대장"} 엑셀 다운로드</h2>
+                <button onclick="state.exportModalOpen=false;render()" class="text-2xl text-slate-400 hover:text-slate-700">&times;</button>
               </div>
 
-              <div class="bg-gray-50 p-3.5 rounded-xl border space-y-2.5 text-sm">
+              <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2.5 text-sm">
                 <div class="flex justify-between items-center">
-                  <span class="font-bold text-gray-800">1. 다운로드 기간 선택</span>
+                  <span class="font-bold text-slate-800">1. 다운로드 기간 선택</span>
                   <div class="flex gap-1 text-xs">
-                    <button type="button" onclick="setExportPreset('thisMonth')" class="px-2 py-1 bg-white border rounded hover:bg-blue-50">이번 달</button>
-                    <button type="button" onclick="setExportPreset('lastMonth')" class="px-2 py-1 bg-white border rounded hover:bg-blue-50">지난 달</button>
-                    <button type="button" onclick="setExportPreset('all')" class="px-2 py-1 bg-white border rounded hover:bg-gray-100">전체</button>
+                    <button type="button" onclick="setExportPreset('thisMonth')" class="px-2 py-1 bg-white border rounded-lg hover:bg-blue-50 font-semibold">이번 달</button>
+                    <button type="button" onclick="setExportPreset('lastMonth')" class="px-2 py-1 bg-white border rounded-lg hover:bg-blue-50 font-semibold">지난 달</button>
+                    <button type="button" onclick="setExportPreset('all')" class="px-2 py-1 bg-white border rounded-lg hover:bg-slate-100 font-semibold">전체</button>
                   </div>
                 </div>
-                <select onchange="state.exportDateKey=this.value;render()" class="w-full border rounded-lg px-2.5 py-2 bg-white text-sm">
+                <select onchange="state.exportDateKey=this.value;render()" class="w-full border border-slate-300 rounded-xl px-2.5 py-2 bg-white text-sm">
                   ${isOrder ? `
                     <option value="receipt_date" ${state.exportDateKey==="receipt_date"?"selected":""}>기준 날짜: 접수일</option>
                     <option value="due_date" ${state.exportDateKey==="due_date"?"selected":""}>기준 날짜: 납기일</option>
@@ -1756,41 +1883,41 @@
                   `}
                 </select>
                 <div class="flex items-center gap-2">
-                  <input type="date" value="${state.exportDateFrom}" onchange="state.exportDateFrom=this.value;render()" class="flex-1 border rounded-lg px-2.5 py-1.5 bg-white text-sm" />
-                  <span class="text-gray-400 font-bold">~</span>
-                  <input type="date" value="${state.exportDateTo}" onchange="state.exportDateTo=this.value;render()" class="flex-1 border rounded-lg px-2.5 py-1.5 bg-white text-sm" />
+                  <input type="date" value="${state.exportDateFrom}" onchange="state.exportDateFrom=this.value;render()" class="flex-1 border border-slate-300 rounded-xl px-2.5 py-1.5 bg-white text-sm" />
+                  <span class="text-slate-400 font-bold">~</span>
+                  <input type="date" value="${state.exportDateTo}" onchange="state.exportDateTo=this.value;render()" class="flex-1 border border-slate-300 rounded-xl px-2.5 py-1.5 bg-white text-sm" />
                 </div>
-                <p class="text-xs text-blue-700 font-medium">※ 선택 조건에 해당하는 <b>${exportRows.length}건</b>이 다운로드됩니다.</p>
+                <p class="text-xs text-blue-700 font-bold">※ 선택 조건에 해당하는 <b>${exportRows.length}건</b>이 다운로드됩니다.</p>
               </div>
 
               <div class="space-y-2">
-                <div class="font-bold text-sm text-gray-800">2. 엑셀 파일 형식 선택</div>
-                <button onclick="exportExcel('xls')" class="w-full text-left p-3 rounded-xl border-2 border-emerald-500 bg-emerald-50/60 hover:bg-emerald-100 transition">
-                  <div class="font-bold text-emerald-900 text-sm">📊 구버전 엑셀용 (.xls)</div>
+                <div class="font-bold text-sm text-slate-800">2. 엑셀 파일 형식 선택</div>
+                <button onclick="exportExcel('xls')" class="w-full text-left p-3 rounded-2xl border-2 border-emerald-500 bg-emerald-50/70 hover:bg-emerald-100 transition">
+                  <div class="font-extrabold text-emerald-900 text-sm">📊 구버전 엑셀용 (.xls)</div>
                   <div class="text-xs text-emerald-700 mt-0.5">엑셀 97~2003 호환 · 구형 PC/엑셀에서 한글 깨짐 없이 열림</div>
                 </button>
-                <button onclick="exportExcel('xlsx')" class="w-full text-left p-3 rounded-xl border border-gray-200 hover:bg-blue-50 transition">
-                  <div class="font-bold text-gray-800 text-sm">📗 최신 엑셀용 (.xlsx)</div>
-                  <div class="text-xs text-gray-500 mt-0.5">엑셀 2007 이상 표준 형식</div>
+                <button onclick="exportExcel('xlsx')" class="w-full text-left p-3 rounded-2xl border border-slate-200 hover:bg-blue-50 transition">
+                  <div class="font-bold text-slate-800 text-sm">📗 최신 엑셀용 (.xlsx)</div>
+                  <div class="text-xs text-slate-500 mt-0.5">엑셀 2007 이상 표준 형식</div>
                 </button>
-                <button onclick="exportExcel('csv')" class="w-full text-left p-3 rounded-xl border border-gray-200 hover:bg-gray-50 transition">
-                  <div class="font-bold text-gray-700 text-sm">📄 CSV 파일 (.csv)</div>
-                  <div class="text-xs text-gray-500 mt-0.5">일반 텍스트 데이터 형식</div>
+                <button onclick="exportExcel('csv')" class="w-full text-left p-3 rounded-2xl border border-slate-200 hover:bg-slate-50 transition">
+                  <div class="font-bold text-slate-700 text-sm">📄 CSV 파일 (.csv)</div>
+                  <div class="text-xs text-slate-500 mt-0.5">일반 텍스트 데이터 형식</div>
                 </button>
               </div>
-              <button onclick="state.exportModalOpen=false;render()" class="w-full py-2 bg-gray-100 rounded-lg text-sm text-gray-600">닫기</button>
+              <button onclick="state.exportModalOpen=false;render()" class="w-full py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-bold text-slate-600">닫기</button>
             </div>
           </div>` : ""}
 
         <!-- 비밀번호 변경 모달 창 -->
         ${state.pwModalOpen ? `
-          <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <form onsubmit="handleChangePassword(event)" class="bg-white rounded-2xl p-6 w-full max-w-sm space-y-4">
-              <h2 class="font-bold text-lg">내 비밀번호 변경 (${state.username})</h2>
-              <input id="newPwInput" type="password" placeholder="새 비밀번호 (6자리 이상)" class="w-full border rounded-lg px-3 py-2" required />
+          <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <form onsubmit="handleChangePassword(event)" class="bg-white rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
+              <h2 class="font-extrabold text-lg">내 비밀번호 변경 (${state.username})</h2>
+              <input id="newPwInput" type="password" placeholder="새 비밀번호 (6자리 이상)" class="w-full border border-slate-300 rounded-xl px-3.5 py-2.5" required />
               <div class="flex justify-end gap-2">
-                <button type="button" onclick="state.pwModalOpen=false;render()" class="px-4 py-2 bg-gray-100 rounded-lg">취소</button>
-                <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold">변경하기</button>
+                <button type="button" onclick="state.pwModalOpen=false;render()" class="px-4 py-2 bg-slate-100 rounded-xl font-semibold">취소</button>
+                <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold">변경하기</button>
               </div>
             </form>
           </div>` : ""}
@@ -1806,15 +1933,14 @@
       const isPhone = PHONE_KEYS.includes(cfg.field_key);
       const isOrderDateTrigger = state.activeTab === "order" && (cfg.field_key === "receipt_date" || cfg.field_key === "due_date");
 
-      // 발주 대장 '옵션 추가' 다중 선택 UI
       if (isMultiOption) {
         const selected = String(val || "").split(",").map(s => s.trim()).filter(Boolean);
         const allOpts = Array.from(new Set([...(cfg.options || []), ...selected]));
         return `
-          <div class="${fullSpan} bg-indigo-50/50 border border-indigo-100 rounded-xl p-3">
+          <div class="${fullSpan} bg-indigo-50/60 border border-indigo-200/80 rounded-2xl p-3">
             <div class="flex justify-between items-center mb-2">
-              <label class="block font-bold text-gray-800">${cfg.field_label} <span class="text-xs font-normal text-indigo-700">(중복 선택 가능)</span></label>
-              <span id="optionAddCount" class="text-xs font-bold text-indigo-700">${selected.length > 0 ? `${selected.length}개 선택됨` : ""}</span>
+              <label class="block font-bold text-slate-800">${cfg.field_label} <span class="text-xs font-normal text-indigo-700">(중복 선택 가능)</span></label>
+              <span id="optionAddCount" class="text-xs font-extrabold text-indigo-700">${selected.length > 0 ? `${selected.length}개 선택됨` : ""}</span>
             </div>
             <input type="hidden" id="inpOptionAdd" name="option_add" value="${selected.join(", ").replace(/"/g, "&quot;")}" />
             <div id="optionAddWrap" class="flex flex-wrap gap-1.5">
@@ -1825,7 +1951,7 @@
                   <button type="button" data-opt="${safeOpt}" onclick="toggleOrderOption(this)"
                     class="${active
                       ? "px-2.5 py-1.5 rounded-lg text-xs font-bold border transition bg-indigo-600 text-white border-indigo-600 shadow-xs"
-                      : "px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition bg-white text-gray-700 border-gray-300 hover:bg-indigo-50"}">
+                      : "px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition bg-white text-slate-700 border-slate-300 hover:bg-indigo-50"}">
                     ${active ? "✓ " : ""}${o}
                   </button>`;
               }).join("")}
@@ -1837,31 +1963,31 @@
       if (cfg.field_type === "select") {
         const opts = cfg.options || [];
         inputHtml = `
-          <select name="${nameAttr}" ${reqAttr} class="w-full border rounded-lg px-3 py-2 bg-white">
+          <select name="${nameAttr}" ${reqAttr} class="w-full border border-slate-300 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
             <option value="">선택</option>
             ${opts.map(o => `<option value="${o}" ${val === o ? "selected" : ""}>${o}</option>`).join("")}
             ${val && !opts.includes(val) ? `<option value="${val}" selected>${val}</option>` : ""}
           </select>`;
       } else if (cfg.field_type === "date" || DATE_KEYS.includes(cfg.field_key)) {
         const onChangeAttr = isOrderDateTrigger ? `onchange="updateModalLeadTime()"` : "";
-        inputHtml = `<input type="date" name="${nameAttr}" value="${val}" ${onChangeAttr} ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
+        inputHtml = `<input type="date" name="${nameAttr}" value="${val}" ${onChangeAttr} ${reqAttr} class="w-full border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />`;
       } else if (cfg.field_type === "textarea" || TEXTAREA_KEYS.includes(cfg.field_key)) {
-        inputHtml = `<textarea name="${nameAttr}" rows="2" ${reqAttr} class="w-full border rounded-lg px-3 py-2">${val}</textarea>`;
+        inputHtml = `<textarea name="${nameAttr}" rows="2" ${reqAttr} class="w-full border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">${val}</textarea>`;
       } else if (isPhone) {
         const formattedPhone = formatKoreanPhone(val);
-        inputHtml = `<input type="tel" name="${nameAttr}" value="${formattedPhone}" oninput="this.value=formatKoreanPhone(this.value)" placeholder="숫자만 입력 (자동 하이픈)" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
+        inputHtml = `<input type="tel" name="${nameAttr}" value="${formattedPhone}" oninput="this.value=formatKoreanPhone(this.value)" placeholder="숫자만 입력 (자동 하이픈)" ${reqAttr} class="w-full border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />`;
       } else {
-        inputHtml = `<input type="text" name="${nameAttr}" value="${val}" ${reqAttr} class="w-full border rounded-lg px-3 py-2" />`;
+        inputHtml = `<input type="text" name="${nameAttr}" value="${val}" ${reqAttr} class="w-full border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />`;
       }
 
       const copyBtn = (cfg.field_key === "address_detail" || cfg.field_key === "dest_address")
-        ? `<button type="button" onclick="copyModalAddress()" class="text-xs bg-gray-100 hover:bg-blue-50 text-blue-600 border border-gray-200 px-2 py-0.5 rounded font-semibold">📋 주소 복사</button>`
+        ? `<button type="button" onclick="copyModalAddress()" class="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-2.5 py-0.5 rounded-lg font-bold">📋 주소 복사</button>`
         : "";
 
       return `
         <div class="${fullSpan}">
           <div class="flex justify-between items-center mb-1">
-            <label class="block font-medium">${cfg.field_label}${isRequired ? ' <span class="text-red-500 font-bold">*</span>' : ""}</label>
+            <label class="block font-bold text-xs text-slate-700">${cfg.field_label}${isRequired ? ' <span class="text-red-500 font-bold">*</span>' : ""}</label>
             ${copyBtn}
           </div>
           ${inputHtml}
@@ -1889,17 +2015,17 @@
       if (payType === "현금") subText = "(출장비 + 부품비 / 부가세 0원)";
 
       return `
-        <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
-          <form id="asRecordForm" onsubmit="saveRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
-            <div class="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
+        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-end md:items-center justify-center z-40 overflow-y-auto">
+          <form id="asRecordForm" onsubmit="saveRecord(event)" class="bg-white w-full max-w-2xl rounded-t-3xl md:rounded-3xl p-5 max-h-[92vh] overflow-y-auto space-y-4 shadow-2xl">
+            <div class="flex justify-between items-center border-b border-slate-200 pb-3 sticky top-0 bg-white z-10">
               <div>
-                <h2 class="font-bold text-lg">${r.id ? "AS 내역 상세 / 수정" : "새 AS 접수 등록"}</h2>
-                <p class="text-xs text-gray-500 mt-0.5"><span class="text-red-500 font-bold">*</span> 표시는 필수 입력 항목입니다</p>
+                <h2 class="font-extrabold text-lg text-slate-900">${r.id ? "AS 내역 상세 / 수정" : "새 AS 접수 등록"}</h2>
+                <p class="text-xs text-slate-500 mt-0.5"><span class="text-red-500 font-bold">*</span> 표시는 필수 입력 항목입니다</p>
               </div>
-              <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
+              <button type="button" onclick="state.modalOpen=false;render()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none px-1">&times;</button>
             </div>
 
-            ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">작성일: <b>${formatDateTime(r.created_at)}</b> (작성자: <b>${r.created_by}</b>) / 최종 수정: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
+            ${r.id ? `<div class="text-xs bg-slate-100 p-2.5 rounded-xl text-slate-600">작성일: <b>${formatDateTime(r.created_at)}</b> (작성자: <b>${r.created_by}</b>) / 최종 수정: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
 
             <div class="grid grid-cols-2 gap-3 text-sm">
               ${sysCols.map(c => {
@@ -1914,18 +2040,18 @@
             </div>
 
             ${customCols.length > 0 ? `
-              <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
+              <div class="border-t border-slate-200 pt-3 grid grid-cols-2 gap-3 text-sm">
                 ${customCols.map(c => {
                   const val = (r.custom_fields && r.custom_fields[c.field_key]) || "";
                   return renderDynamicInput(c, val, false);
                 }).join("")}
               </div>` : ""}
 
-            <div class="bg-blue-50 p-3.5 rounded-xl space-y-3 text-sm">
+            <div class="bg-blue-50/80 border border-blue-200 p-3.5 rounded-2xl space-y-3 text-sm">
               <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div>
                   <label class="block font-bold text-xs text-blue-900 mb-1">출장비 구분</label>
-                  <select id="inpPaymentType" name="payment_type" onchange="calcModalTotal()" class="w-full border border-blue-200 rounded-lg px-2 py-2 bg-white font-semibold">
+                  <select id="inpPaymentType" name="payment_type" onchange="calcModalTotal()" class="w-full border border-blue-200 rounded-xl px-2 py-2 bg-white font-bold">
                     <option value="" ${payType===""?"selected":""}>선택</option>
                     <option value="현금" ${payType==="현금"?"selected":""}>현금</option>
                     <option value="세금계산서" ${payType==="세금계산서"?"selected":""}>세금계산서</option>
@@ -1933,32 +2059,32 @@
                   </select>
                 </div>
                 <div>
-                  <label class="block font-medium text-xs mb-1">출장비 (원)</label>
-                  <input id="inpRepairCost" type="number" name="repair_cost" value="${repair}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
+                  <label class="block font-bold text-xs text-slate-700 mb-1">출장비 (원)</label>
+                  <input id="inpRepairCost" type="number" name="repair_cost" value="${repair}" oninput="calcModalTotal()" class="w-full border border-slate-300 rounded-xl px-2.5 py-2 bg-white" />
                 </div>
                 <div>
-                  <label class="block font-medium text-xs mb-1">부품비 (원)</label>
-                  <input id="inpPartsCost" type="number" name="parts_cost" value="${parts}" oninput="calcModalTotal()" class="w-full border rounded-lg px-2.5 py-2 bg-white" />
+                  <label class="block font-bold text-xs text-slate-700 mb-1">부품비 (원)</label>
+                  <input id="inpPartsCost" type="number" name="parts_cost" value="${parts}" oninput="calcModalTotal()" class="w-full border border-slate-300 rounded-xl px-2.5 py-2 bg-white" />
                 </div>
                 <div>
                   <label class="block font-bold text-xs text-indigo-900 mb-1">부가세 (자동)</label>
-                  <input id="inpVatCost" type="text" value="${vat.toLocaleString()}원" readonly tabindex="-1" class="w-full border border-blue-200 rounded-lg px-2.5 py-2 bg-blue-100/70 text-indigo-900 font-semibold text-right cursor-not-allowed focus:outline-none" />
+                  <input id="inpVatCost" type="text" value="${vat.toLocaleString()}원" readonly tabindex="-1" class="w-full border border-blue-200 rounded-xl px-2.5 py-2 bg-blue-100/70 text-indigo-900 font-bold text-right cursor-not-allowed focus:outline-none" />
                 </div>
               </div>
               <div class="flex justify-between items-center border-t border-blue-200 pt-2">
                 <span id="modalSubDisplay" class="text-xs text-blue-800">${subText}</span>
                 <div class="text-right">
-                  <span class="text-xs text-gray-600 mr-1">최종 합계</span>
-                  <span id="modalTotalDisplay" class="font-bold text-lg text-blue-700">${total.toLocaleString()}원</span>
+                  <span class="text-xs text-slate-600 mr-1">최종 합계</span>
+                  <span id="modalTotalDisplay" class="font-extrabold text-lg text-blue-700">${total.toLocaleString()}원</span>
                 </div>
               </div>
             </div>
 
-            <div class="flex justify-between pt-3 border-t">
-              ${r.id ? `<button type="button" onclick="deleteRecord('${r.id}')" class="px-4 py-2.5 text-red-600 bg-red-50 rounded-lg text-sm font-medium">삭제</button>` : `<div></div>`}
+            <div class="flex justify-between pt-3 border-t border-slate-200">
+              ${r.id ? `<button type="button" onclick="deleteRecord('${r.id}')" class="px-4 py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-sm font-bold">삭제</button>` : `<div></div>`}
               <div class="flex gap-2">
-                <button type="button" onclick="state.modalOpen=false;render()" class="px-4 py-2.5 bg-gray-100 rounded-lg text-sm">취소</button>
-                <button type="submit" class="px-6 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-bold">저장하기</button>
+                <button type="button" onclick="state.modalOpen=false;render()" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-bold">취소</button>
+                <button type="submit" class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-extrabold shadow-sm">저장하기</button>
               </div>
             </div>
           </form>
@@ -1980,20 +2106,20 @@
       const leadText = formatLeadDaysText(initReceipt, initDue);
 
       return `
-        <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-40 overflow-y-auto">
-          <form id="orderRecordForm" onsubmit="saveOrderRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
-            <div class="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
+        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-end md:items-center justify-center z-40 overflow-y-auto">
+          <form id="orderRecordForm" onsubmit="saveOrderRecord(event)" class="bg-white w-full max-w-2xl rounded-t-3xl md:rounded-3xl p-5 max-h-[92vh] overflow-y-auto space-y-4 shadow-2xl">
+            <div class="flex justify-between items-center border-b border-slate-200 pb-3 sticky top-0 bg-white z-10">
               <div>
                 <div class="flex items-center gap-2">
-                  <h2 class="font-bold text-lg">${isEditExisting ? "KOASIS 발주 내역 상세 / 수정" : "새 KOASIS 발주 등록"}</h2>
-                  ${state.isCopiedOrder ? `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">📋 동일 스펙 복사 등록중</span>` : ""}
+                  <h2 class="font-extrabold text-lg text-slate-900">${isEditExisting ? "KOASIS 발주 내역 상세 / 수정" : "새 KOASIS 발주 등록"}</h2>
+                  ${state.isCopiedOrder ? `<span class="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-amber-100 text-amber-800 border border-amber-300">📋 동일 스펙 복사 등록중</span>` : ""}
                 </div>
-                <p class="text-xs text-gray-500 mt-0.5"><span class="text-red-500 font-bold">*</span> 표시는 필수 입력 항목입니다</p>
+                <p class="text-xs text-slate-500 mt-0.5"><span class="text-red-500 font-bold">*</span> 표시는 필수 입력 항목입니다</p>
               </div>
-              <button type="button" onclick="state.modalOpen=false;state.isCopiedOrder=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
+              <button type="button" onclick="state.modalOpen=false;state.isCopiedOrder=false;render()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none px-1">&times;</button>
             </div>
 
-            ${isEditExisting ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">생성일시: <b>${formatDateTime(r.created_at)}</b> (생성자: <b>${r.created_by || "-"}</b>) / 최종 편집: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
+            ${isEditExisting ? `<div class="text-xs bg-slate-100 p-2.5 rounded-xl text-slate-600">생성일시: <b>${formatDateTime(r.created_at)}</b> (생성자: <b>${r.created_by || "-"}</b>) / 최종 편집: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
 
             <div class="grid grid-cols-2 gap-3 text-sm">
               ${sysCols.map(c => {
@@ -2005,9 +2131,9 @@
                 const fieldHtml = renderDynamicInput(c, val, ORDER_REQUIRED_KEYS.includes(c.field_key));
                 if (c.field_key === "due_date") {
                   return fieldHtml + `
-                    <div class="col-span-2 bg-indigo-50/70 border border-indigo-100 rounded-lg px-3 py-2 flex justify-between items-center text-xs sm:text-sm">
-                      <span class="font-medium text-indigo-900">⏱️ 소요 예정일 (접수일 ~ 납기일 자동 계산)</span>
-                      <span id="modalLeadTimeDisplay" class="font-bold text-indigo-700 text-base">${leadText}</span>
+                    <div class="col-span-2 bg-indigo-50/80 border border-indigo-200/80 rounded-2xl px-3.5 py-2.5 flex justify-between items-center text-xs sm:text-sm">
+                      <span class="font-bold text-indigo-900">⏱️ 소요 예정일 (접수일 ~ 납기일 자동 계산)</span>
+                      <span id="modalLeadTimeDisplay" class="font-extrabold text-indigo-700 text-base">${leadText}</span>
                     </div>`;
                 }
                 return fieldHtml;
@@ -2015,23 +2141,23 @@
             </div>
 
             ${customCols.length > 0 ? `
-              <div class="border-t pt-3 grid grid-cols-2 gap-3 text-sm">
+              <div class="border-t border-slate-200 pt-3 grid grid-cols-2 gap-3 text-sm">
                 ${customCols.map(c => {
                   const val = (r.custom_fields && r.custom_fields[c.field_key]) || "";
                   return renderDynamicInput(c, val, false);
                 }).join("")}
               </div>` : ""}
 
-            <div class="flex flex-wrap justify-between items-center gap-2 pt-3 border-t">
+            <div class="flex flex-wrap justify-between items-center gap-2 pt-3 border-t border-slate-200">
               <div class="flex items-center gap-1.5">
                 ${isEditExisting ? `
-                  <button type="button" onclick="deleteRecord('${r.id}')" class="px-3.5 py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-sm font-medium">삭제</button>
-                  <button type="button" onclick="duplicateOrderRecord()" class="px-3.5 py-2.5 text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-sm font-bold">📋 동일 스펙 복사 등록</button>
+                  <button type="button" onclick="deleteRecord('${r.id}')" class="px-3.5 py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-sm font-bold">삭제</button>
+                  <button type="button" onclick="duplicateOrderRecord()" class="px-3.5 py-2.5 text-amber-900 bg-amber-100/80 hover:bg-amber-200/80 border border-amber-300 rounded-xl text-sm font-extrabold">📋 동일 스펙 복사 등록</button>
                 ` : ""}
               </div>
               <div class="flex gap-2 ml-auto">
-                <button type="button" onclick="state.modalOpen=false;state.isCopiedOrder=false;render()" class="px-4 py-2.5 bg-gray-100 rounded-lg text-sm">취소</button>
-                <button type="submit" class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장하기</button>
+                <button type="button" onclick="state.modalOpen=false;state.isCopiedOrder=false;render()" class="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-bold">취소</button>
+                <button type="submit" class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-extrabold shadow-sm">저장하기</button>
               </div>
             </div>
           </form>
@@ -2052,57 +2178,57 @@
         const isDate = c.field_type === "date" || DATE_KEYS.includes(c.field_key);
         const hasDbId = Boolean(c.id);
         return `
-          <div class="bg-gray-50 p-3 rounded-lg space-y-2 border">
+          <div class="bg-slate-50 p-3 rounded-2xl space-y-2 border border-slate-200">
             <div class="flex justify-between items-center gap-2">
-              <div class="font-bold text-gray-800">${c.field_label}</div>
+              <div class="font-bold text-slate-800">${c.field_label}</div>
               <div class="flex items-center gap-1.5">
                 ${!isDate && hasDbId ? `
-                  <select id="type_${c.id}" onchange="document.getElementById('optwrap_${c.id}').style.display=this.value==='select'?'block':'none'" class="border rounded px-2 py-1 text-xs bg-white">
+                  <select id="type_${c.id}" onchange="document.getElementById('optwrap_${c.id}').style.display=this.value==='select'?'block':'none'" class="border border-slate-300 rounded-lg px-2 py-1 text-xs bg-white">
                     <option value="text" ${!isSelect ? "selected" : ""}>직접 입력(텍스트)</option>
                     <option value="select" ${isSelect ? "selected" : ""}>선택형(드롭다운)</option>
                   </select>
-                  <button onclick="saveFieldConfig('${c.id}', '${c.field_key}')" class="px-2.5 py-1 bg-blue-600 text-white rounded text-xs font-semibold">적용</button>
-                ` : `<span class="text-xs text-gray-400">${isDate ? "날짜 입력형" : "기본 설정"}</span>`}
-                ${!c.is_system && hasDbId ? `<button onclick="deleteCustomField('${c.id}')" class="px-2 py-1 bg-red-50 text-red-600 rounded text-xs">삭제</button>` : ""}
+                  <button onclick="saveFieldConfig('${c.id}', '${c.field_key}')" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold">적용</button>
+                ` : `<span class="text-xs text-slate-400">${isDate ? "날짜 입력형" : "기본 설정"}</span>`}
+                ${!c.is_system && hasDbId ? `<button onclick="deleteCustomField('${c.id}')" class="px-2 py-1 bg-red-50 text-red-600 rounded-lg text-xs font-bold">삭제</button>` : ""}
               </div>
             </div>
             ${hasDbId ? `
               <div id="optwrap_${c.id}" style="display:${isSelect ? "block" : "none"}">
-                <input id="opt_${c.id}" value="${(c.options || []).join(", ")}" placeholder="선택 항목을 쉼표(,)로 구분해 입력" class="w-full border rounded px-2.5 py-1.5 text-xs bg-white" />
+                <input id="opt_${c.id}" value="${(c.options || []).join(", ")}" placeholder="선택 항목을 쉼표(,)로 구분해 입력" class="w-full border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs bg-white" />
               </div>` : ""}
           </div>`;
       };
 
       return `
-        <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div class="bg-white rounded-2xl p-5 w-full max-w-xl max-h-[90vh] overflow-y-auto space-y-5 text-sm">
-            <div class="flex justify-between items-center border-b pb-2 sticky top-0 bg-white z-10">
-              <h2 class="font-bold text-lg">${isOrder ? "KOASIS 발주 대장" : "AS 접수 대장"} 항목 및 옵션 관리</h2>
-              <button onclick="state.configModalOpen=false;render()" class="text-2xl text-gray-400">&times;</button>
+        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div class="bg-white rounded-3xl p-5 w-full max-w-xl max-h-[90vh] overflow-y-auto space-y-5 text-sm shadow-2xl">
+            <div class="flex justify-between items-center border-b border-slate-200 pb-2.5 sticky top-0 bg-white z-10">
+              <h2 class="font-extrabold text-lg">${isOrder ? "KOASIS 발주 대장" : "AS 접수 대장"} 항목 및 옵션 관리</h2>
+              <button onclick="state.configModalOpen=false;render()" class="text-2xl text-slate-400 hover:text-slate-700">&times;</button>
             </div>
 
-            <form onsubmit="addNewField(event)" class="bg-emerald-50/70 p-3.5 rounded-xl space-y-2 border border-emerald-200">
-              <h3 class="font-bold text-emerald-900">+ 새 입력 항목 추가하기</h3>
+            <form onsubmit="addNewField(event)" class="bg-emerald-50/80 p-3.5 rounded-2xl space-y-2 border border-emerald-200">
+              <h3 class="font-extrabold text-emerald-900">+ 새 입력 항목 추가하기</h3>
               <div class="grid grid-cols-2 gap-2">
-                <input id="newFieldLabel" placeholder="새 항목명 입력" class="border rounded px-2.5 py-2 bg-white" />
-                <select id="newFieldType" onchange="document.getElementById('newFieldOpts').style.display=this.value==='select'?'block':'none'" class="border rounded px-2.5 py-2 bg-white">
+                <input id="newFieldLabel" placeholder="새 항목명 입력" class="border border-slate-300 rounded-xl px-2.5 py-2 bg-white" />
+                <select id="newFieldType" onchange="document.getElementById('newFieldOpts').style.display=this.value==='select'?'block':'none'" class="border border-slate-300 rounded-xl px-2.5 py-2 bg-white">
                   <option value="select">선택형 (드롭다운)</option>
                   <option value="text">직접 입력 (텍스트)</option>
                 </select>
               </div>
-              <input id="newFieldOpts" placeholder="선택 옵션 입력 (쉼표로 구분: 옵션1, 옵션2)" class="w-full border rounded px-2.5 py-2 bg-white" />
-              <button type="submit" class="w-full py-2 bg-emerald-600 text-white rounded-lg font-semibold">새 항목 추가</button>
+              <input id="newFieldOpts" placeholder="선택 옵션 입력 (쉼표로 구분: 옵션1, 옵션2)" class="w-full border border-slate-300 rounded-xl px-2.5 py-2 bg-white" />
+              <button type="submit" class="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold">새 항목 추가</button>
             </form>
 
             ${customCols.length > 0 ? `
               <div class="space-y-2">
-                <h3 class="font-bold text-gray-700">추가된 항목 설정</h3>
+                <h3 class="font-bold text-slate-700">추가된 항목 설정</h3>
                 ${customCols.map(renderConfigRow).join("")}
               </div>` : ""}
 
-            <div class="space-y-2 border-t pt-3">
-              <h3 class="font-bold text-gray-700">기존 항목 입력 방식 전환 및 선택 목록 수정</h3>
-              <p class="text-xs text-gray-500">각 항목의 방식을 [직접 입력] 또는 [선택형]으로 바꾼 뒤 '적용'을 누르세요.</p>
+            <div class="space-y-2 border-t border-slate-200 pt-3">
+              <h3 class="font-bold text-slate-700">기존 항목 입력 방식 전환 및 선택 목록 수정</h3>
+              <p class="text-xs text-slate-500">각 항목의 방식을 [직접 입력] 또는 [선택형]으로 바꾼 뒤 '적용'을 누르세요.</p>
               <div class="space-y-2">
                 ${sysCols.map(renderConfigRow).join("")}
               </div>
