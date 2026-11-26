@@ -18,9 +18,6 @@
   <div id="toast" class="fixed bottom-20 left-1/2 -translate-x-1/2 bg-gray-900/90 text-white text-xs font-semibold px-4 py-2.5 rounded-full shadow-lg z-50 transition-opacity duration-200 opacity-0 pointer-events-none"></div>
 
   <script>
-    // ==========================================
-    // [중요] 아래 두 번째 줄에 기존에 쓰던 eyJ... 암호를 붙여넣으세요!
-    // ==========================================
     const SUPABASE_URL = "https://egntrwdxehqyyntjuczr.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnbnRyd2R4ZWhxeXludGp1Y3pyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU1NzI2MjMsImV4cCI6MjExMTE0ODYyM30.DCeVvGoJ7m41FhNPH39dLzogrTsdq6QiAoRgsT7CgH0";
 
@@ -68,6 +65,7 @@
       pwModalOpen: false,
       exportModalOpen: false,
       editingRecord: null,
+      isCopiedOrder: false,
       isSyncing: false
     };
 
@@ -85,12 +83,10 @@
       "serial_number", "dest_type", "dest_address", "dest_phone", "remarks"
     ];
 
-    // 발주 대장에서 반드시 선택형(select)으로 유지할 항목 키
     const ORDER_FORCE_SELECT_KEYS = [
       "shipment_status", "model_name", "orderer", "pump_change", "option_add"
     ];
 
-    // DB 설정 테이블이 비어 있을 때를 대비한 발주 대장 기본 항목 정의
     const DEFAULT_ORDER_CONFIGS = [
       { field_key: "client_name", field_label: "발주처", field_type: "text", options: [], is_system: true, sort_order: 1 },
       { field_key: "shipment_status", field_label: "출고 현황", field_type: "select", options: ["발주접수","자재준비","생산중","출고대기","출고완료","보류"], is_system: true, sort_order: 2 },
@@ -163,7 +159,6 @@
       return String(val).slice(0, 10);
     }
 
-    // 접수일(발주일) ~ 납기일 소요 예정일(일수) 계산
     function calcLeadDays(receiptDate, dueDate) {
       if (!receiptDate || !dueDate) return null;
       const d1 = new Date(receiptDate + "T00:00:00");
@@ -188,13 +183,85 @@
       el.innerText = formatLeadDaysText(rDate, dDate);
     }
 
+    // 옵션 추가 다중 선택 토글
+    function toggleOrderOption(btnEl) {
+      const opt = btnEl.getAttribute("data-opt");
+      const hiddenInp = document.getElementById("inpOptionAdd");
+      const wrap = document.getElementById("optionAddWrap");
+      const countBadge = document.getElementById("optionAddCount");
+      if (!hiddenInp || !wrap) return;
+
+      let selected = hiddenInp.value
+        ? hiddenInp.value.split(",").map(s => s.trim()).filter(Boolean)
+        : [];
+
+      if (opt === "없음") {
+        selected = selected.includes("없음") ? [] : ["없음"];
+      } else {
+        selected = selected.filter(item => item !== "없음");
+        if (selected.includes(opt)) {
+          selected = selected.filter(item => item !== opt);
+        } else {
+          selected.push(opt);
+        }
+      }
+
+      hiddenInp.value = selected.join(", ");
+
+      wrap.querySelectorAll("button[data-opt]").forEach(b => {
+        const val = b.getAttribute("data-opt");
+        const active = selected.includes(val);
+        b.className = active
+          ? "px-2.5 py-1.5 rounded-lg text-xs font-bold border transition bg-indigo-600 text-white border-indigo-600 shadow-xs"
+          : "px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition bg-white text-gray-700 border-gray-300 hover:bg-indigo-50";
+        b.innerText = (active ? "✓ " : "") + val;
+      });
+
+      if (countBadge) {
+        countBadge.innerText = selected.length > 0 ? `${selected.length}개 선택됨` : "";
+      }
+    }
+
+    // 동일 스펙 복사 등록 전환
+    function duplicateOrderRecord() {
+      const form = document.getElementById("orderRecordForm");
+      if (!form) return;
+
+      const customFields = {};
+      state.orderConfigs.filter(c => !c.is_system).forEach(c => {
+        customFields[c.field_key] = form["custom_" + c.field_key]?.value || "";
+      });
+
+      const copied = {
+        client_name: form.client_name?.value || "",
+        shipment_status: "발주접수",
+        receipt_date: form.receipt_date?.value || new Date().toISOString().slice(0, 10),
+        due_date: form.due_date?.value || "",
+        model_name: form.model_name?.value || "",
+        orderer: form.orderer?.value || state.username,
+        pump_change: form.pump_change?.value || "",
+        option_add: document.getElementById("inpOptionAdd")?.value || "",
+        serial_number: "", // 대수별 기대번호는 새로 입력하도록 비움
+        dest_type: form.dest_type?.value || "",
+        dest_address: form.dest_address?.value || "",
+        dest_phone: form.dest_phone?.value || "",
+        remarks: form.remarks?.value || "",
+        custom_fields: customFields
+      };
+
+      state.editingRecord = copied;
+      state.isCopiedOrder = true;
+      render();
+      showToast("📋 동일 스펙이 복사되었습니다. 기대번호 입력 후 저장하세요.");
+    }
+
     function showToast(msg) {
       const t = document.getElementById("toast");
       if (!t) return;
       t.innerText = msg;
       t.classList.remove("opacity-0");
       clearTimeout(window._toastTimer);
-      window._toastTimer = setTimeout(() => t.classList.add("opacity-0"), 2200);
+      window._toastTimer = setTimeout(() => t.classList.add("opacity-0"), 2400);
     }
 
     async function copyText(text) {
@@ -238,6 +305,7 @@
       state.configModalOpen = false;
       state.exportModalOpen = false;
       state.editingRecord = null;
+      state.isCopiedOrder = false;
       render();
     }
 
@@ -456,7 +524,6 @@
 
       if (ordCfgRes.data && ordCfgRes.data.length > 0) {
         let cfgs = ordCfgRes.data;
-        // 지정된 5개 항목이 기존 DB에 텍스트형으로 되어 있으면 자동으로 선택형(select)으로 전환
         for (const c of cfgs) {
           if (ORDER_FORCE_SELECT_KEYS.includes(c.field_key) && c.field_type !== "select") {
             const defCfg = buildDefaultConfigsWithTeam().find(d => d.field_key === c.field_key);
@@ -547,6 +614,7 @@
 
     function openForm(record = null) {
       state.editingRecord = record;
+      state.isCopiedOrder = false;
       state.modalOpen = true;
       render();
     }
@@ -645,7 +713,7 @@
         updated_at: new Date().toISOString()
       };
 
-      if (state.editingRecord) {
+      if (state.editingRecord && state.editingRecord.id) {
         const { error } = await sb.from("as_records").update(payload).eq("id", state.editingRecord.id);
         if (error) return alert("수정 오류: " + error.message);
       } else {
@@ -692,7 +760,7 @@
         model_name: modelName,
         orderer: f.orderer?.value.trim() || "",
         pump_change: f.pump_change?.value || "",
-        option_add: f.option_add?.value || "",
+        option_add: (document.getElementById("inpOptionAdd")?.value || f.option_add?.value || "").trim(),
         serial_number: f.serial_number?.value.trim() || "",
         dest_type: f.dest_type?.value || "",
         dest_address: f.dest_address?.value.trim() || "",
@@ -703,7 +771,7 @@
         updated_at: new Date().toISOString()
       };
 
-      if (state.editingRecord) {
+      if (state.editingRecord && state.editingRecord.id) {
         const { error } = await sb.from("order_records").update(payload).eq("id", state.editingRecord.id);
         if (error) {
           if (error.message.includes("order_records")) {
@@ -724,6 +792,7 @@
 
       state.modalOpen = false;
       state.editingRecord = null;
+      state.isCopiedOrder = false;
       await loadAllData();
       render();
       showToast("✅ 발주 내역이 저장되었습니다");
@@ -735,6 +804,8 @@
       if (!confirm(`정말 이 ${label}을 삭제할까요?`)) return;
       await sb.from(table).delete().eq("id", id);
       state.modalOpen = false;
+      state.editingRecord = null;
+      state.isCopiedOrder = false;
       await loadAllData();
       render();
       showToast("🗑️ 삭제되었습니다");
@@ -1730,10 +1801,38 @@
     function renderDynamicInput(cfg, val, isRequired = false) {
       const nameAttr = cfg.is_system ? cfg.field_key : `custom_${cfg.field_key}`;
       const reqAttr = isRequired ? "required" : "";
-      const isFullSpan = (cfg.field_key === "address_detail" || cfg.field_key === "dest_address" || cfg.field_type === "textarea");
+      const isMultiOption = (state.activeTab === "order" && cfg.field_key === "option_add");
+      const isFullSpan = (cfg.field_key === "address_detail" || cfg.field_key === "dest_address" || cfg.field_type === "textarea" || isMultiOption);
       const fullSpan = isFullSpan ? "col-span-2" : "";
       const isPhone = PHONE_KEYS.includes(cfg.field_key);
       const isOrderDateTrigger = state.activeTab === "order" && (cfg.field_key === "receipt_date" || cfg.field_key === "due_date");
+
+      // 발주 대장 '옵션 추가' 다중 선택 UI
+      if (isMultiOption) {
+        const selected = String(val || "").split(",").map(s => s.trim()).filter(Boolean);
+        const allOpts = Array.from(new Set([...(cfg.options || []), ...selected]));
+        return `
+          <div class="${fullSpan} bg-indigo-50/50 border border-indigo-100 rounded-xl p-3">
+            <div class="flex justify-between items-center mb-2">
+              <label class="block font-bold text-gray-800">${cfg.field_label} <span class="text-xs font-normal text-indigo-700">(중복 선택 가능)</span></label>
+              <span id="optionAddCount" class="text-xs font-bold text-indigo-700">${selected.length > 0 ? `${selected.length}개 선택됨` : ""}</span>
+            </div>
+            <input type="hidden" id="inpOptionAdd" name="option_add" value="${selected.join(", ").replace(/"/g, "&quot;")}" />
+            <div id="optionAddWrap" class="flex flex-wrap gap-1.5">
+              ${allOpts.map(o => {
+                const active = selected.includes(o);
+                const safeOpt = o.replace(/"/g, "&quot;");
+                return `
+                  <button type="button" data-opt="${safeOpt}" onclick="toggleOrderOption(this)"
+                    class="${active
+                      ? "px-2.5 py-1.5 rounded-lg text-xs font-bold border transition bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                      : "px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition bg-white text-gray-700 border-gray-300 hover:bg-indigo-50"}">
+                    ${active ? "✓ " : ""}${o}
+                  </button>`;
+              }).join("")}
+            </div>
+          </div>`;
+      }
 
       let inputHtml = "";
       if (cfg.field_type === "select") {
@@ -1871,11 +1970,13 @@
     function renderOrderFormModal() {
       const r = state.editingRecord || {};
       const today = new Date().toISOString().slice(0, 10);
+      const isEditExisting = Boolean(r.id);
+      const hasPrefill = isEditExisting || state.isCopiedOrder;
 
       const sysCols = ORDER_SYSTEM_KEYS.map(k => getOrderCfg(k)).filter(Boolean);
       const customCols = state.orderConfigs.filter(c => !c.is_system);
 
-      const initReceipt = r.id ? (r.receipt_date || "") : today;
+      const initReceipt = hasPrefill ? (r.receipt_date || "") : today;
       const initDue = r.due_date || "";
       const leadText = formatLeadDaysText(initReceipt, initDue);
 
@@ -1884,20 +1985,23 @@
           <form id="orderRecordForm" onsubmit="saveOrderRecord(event)" class="bg-white w-full max-w-2xl rounded-t-2xl md:rounded-2xl p-5 max-h-[92vh] overflow-y-auto space-y-4">
             <div class="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
               <div>
-                <h2 class="font-bold text-lg">${r.id ? "KOASIS 발주 내역 상세 / 수정" : "새 KOASIS 발주 등록"}</h2>
+                <div class="flex items-center gap-2">
+                  <h2 class="font-bold text-lg">${isEditExisting ? "KOASIS 발주 내역 상세 / 수정" : "새 KOASIS 발주 등록"}</h2>
+                  ${state.isCopiedOrder ? `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">📋 동일 스펙 복사 등록중</span>` : ""}
+                </div>
                 <p class="text-xs text-gray-500 mt-0.5"><span class="text-red-500 font-bold">*</span> 표시는 필수 입력 항목입니다</p>
               </div>
-              <button type="button" onclick="state.modalOpen=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
+              <button type="button" onclick="state.modalOpen=false;state.isCopiedOrder=false;render()" class="text-gray-400 text-2xl leading-none">&times;</button>
             </div>
 
-            ${r.id ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">생성일시: <b>${formatDateTime(r.created_at)}</b> (생성자: <b>${r.created_by || "-"}</b>) / 최종 편집: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
+            ${isEditExisting ? `<div class="text-xs bg-gray-100 p-2 rounded text-gray-600">생성일시: <b>${formatDateTime(r.created_at)}</b> (생성자: <b>${r.created_by || "-"}</b>) / 최종 편집: <b>${r.updated_by || "-"}</b>${r.updated_at && r.updated_by ? ` (${formatDateTime(r.updated_at)})` : ""}</div>` : ""}
 
             <div class="grid grid-cols-2 gap-3 text-sm">
               ${sysCols.map(c => {
                 let val = r[c.field_key] ?? "";
-                if (!r.id && c.field_key === "receipt_date") val = today;
-                if (!r.id && c.field_key === "shipment_status") val = "발주접수";
-                if (!r.id && c.field_key === "orderer") val = state.username;
+                if (!hasPrefill && c.field_key === "receipt_date") val = today;
+                if (!hasPrefill && c.field_key === "shipment_status") val = "발주접수";
+                if (!hasPrefill && c.field_key === "orderer") val = state.username;
 
                 const fieldHtml = renderDynamicInput(c, val, ORDER_REQUIRED_KEYS.includes(c.field_key));
                 if (c.field_key === "due_date") {
@@ -1919,10 +2023,15 @@
                 }).join("")}
               </div>` : ""}
 
-            <div class="flex justify-between pt-3 border-t">
-              ${r.id ? `<button type="button" onclick="deleteRecord('${r.id}')" class="px-4 py-2.5 text-red-600 bg-red-50 rounded-lg text-sm font-medium">삭제</button>` : `<div></div>`}
-              <div class="flex gap-2">
-                <button type="button" onclick="state.modalOpen=false;render()" class="px-4 py-2.5 bg-gray-100 rounded-lg text-sm">취소</button>
+            <div class="flex flex-wrap justify-between items-center gap-2 pt-3 border-t">
+              <div class="flex items-center gap-1.5">
+                ${isEditExisting ? `
+                  <button type="button" onclick="deleteRecord('${r.id}')" class="px-3.5 py-2.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-sm font-medium">삭제</button>
+                  <button type="button" onclick="duplicateOrderRecord()" class="px-3.5 py-2.5 text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-sm font-bold">📋 동일 스펙 복사 등록</button>
+                ` : ""}
+              </div>
+              <div class="flex gap-2 ml-auto">
+                <button type="button" onclick="state.modalOpen=false;state.isCopiedOrder=false;render()" class="px-4 py-2.5 bg-gray-100 rounded-lg text-sm">취소</button>
                 <button type="submit" class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장하기</button>
               </div>
             </div>
